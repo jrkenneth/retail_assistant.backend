@@ -1,10 +1,10 @@
 # Backend
 
-Express + TypeScript API for Rogers Copilot. This service is the source of truth for authentication, chat orchestration, RBAC, session ownership, artifact generation, access requests, and audit-safe tool execution.
+Express + TypeScript API for Lena. This service is the source of truth for authentication, chat orchestration, RBAC, session ownership, artifact generation, access requests, and audit-safe tool execution.
 
 ## What This Service Does
 
-- Authenticates users against the Aletia HR backend and issues JWTs
+- Authenticates users against the Velora backend and issues JWTs
 - Enforces login rate limiting and token revocation checks
 - Protects all business routes with JWT middleware
 - Persists chat sessions, messages, tool traces, artifacts, access requests, and audit events in PostgreSQL
@@ -35,7 +35,7 @@ This design keeps the LLM useful for reasoning and phrasing, but not authoritati
 - Authentication and JWT session management
 - Session-scoped chat history
 - Streaming chat responses
-- Tool-based HR querying through the Aletia adapter
+- Tool-based data querying through the Velora adapter path
 - Deterministic RBAC and self-service access rules
 - Access denied escalation to access requests
 - Artifact generation and preview/download support
@@ -47,7 +47,7 @@ This design keeps the LLM useful for reasoning and phrasing, but not authoritati
 ```text
 src/
   accessRequests/    Access-request sanitization helpers
-  adapters/aletia/   Aletia API adapter and intent map
+  adapters/aletia/   Legacy adapter path to be replaced with Velora ecommerce integration
   agent/             Router, planner, system prompt, tool registry, model client
   artifacts/         Artifact generation and content types
   audit/             Audit logger
@@ -88,7 +88,7 @@ storage/exports/     Generated artifact files
 
 - Node.js 18+
 - PostgreSQL running locally or reachable from `DATABASE_URL`
-- Aletia backend running locally, typically on `http://localhost:4001`
+- Velora backend running locally, typically on `http://localhost:4001`
 - A configured LLM provider
 - Optional Tavily credentials if web research is enabled
 
@@ -203,8 +203,8 @@ Authenticated routes:
 
 ## Authentication and Session Model
 
-- Users log in with Aletia-backed credentials
-- Copilot issues a JWT carrying identity and mapped access role
+- Users log in with Velora-backed credentials
+- Lena issues a JWT carrying identity and mapped access role
 - Login is rate-limited
 - Logout revokes the current token via `jti` blacklist
 - Protected routes require a valid, non-revoked token
@@ -217,7 +217,7 @@ RBAC is enforced inside the `execute_query` tool, not just by prompts.
 The backend currently applies:
 
 - role mapping from business identity to `employee`, `manager`, `hr_officer`, `finance_officer`, or `admin`
-- stale employee-status revalidation through Aletia on each tool execution
+- stale identity-status revalidation through the Velora service on each tool execution
 - intent allow-lists by role
 - unconditional scope overrides for self-service, employee, and manager paths
 - post-query ownership/scope validation
@@ -294,9 +294,9 @@ Current test command runs TypeScript typechecking.
 ## Typical Local Workflow
 
 1. Start PostgreSQL.
-2. Start the Aletia backend.
+2. Start the Velora backend.
 3. Run `npm run db:migrate`.
-4. Start the Copilot backend with `npm run dev`.
+4. Start the Lena backend with `npm run dev`.
 5. Start the frontend from the `frontend/` folder.
 6. Log in with a seeded user.
 7. Create a session and send prompts.
@@ -304,4 +304,4 @@ Current test command runs TypeScript typechecking.
 
 ## Related Docs
 
-- [aletia_backend/API_DOCUMENTATION.md](./aletia_backend/API_DOCUMENTATION.md) for Aletia API details
+- [velora_backend/API_DOCUMENTATION.md](./velora_backend/API_DOCUMENTATION.md) for the simulated external backend details

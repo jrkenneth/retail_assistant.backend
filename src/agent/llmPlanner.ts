@@ -5,7 +5,11 @@ import { extractMessageText, getChatModel } from "./llmClient.js";
 import { AGENT_SYSTEM_PROMPT } from "./systemPrompt.js";
 import type { ModeOptions } from "./systemPrompt.js";
 import { artifactTypeSchema, type ArtifactType } from "../artifacts/types.js";
-import { skillSummaryLines } from "./skillRegistry.js";
+import {
+  SPECIALIST_SKILL_NAMES,
+  specialistSkillSummaryLines,
+  type SpecialistSkillName,
+} from "./skillRegistry.js";
 import { toolDescriptions, type ToolName } from "./toolRegistry.js";
 import type {
   AgentAction,
@@ -68,6 +72,10 @@ function validateToolCallInput(tool: ToolName, toolInput: unknown): boolean {
   }
 
   return false;
+}
+
+function validateSkillCallInput(skill: unknown): skill is SpecialistSkillName {
+  return typeof skill === "string" && SPECIALIST_SKILL_NAMES.includes(skill as SpecialistSkillName);
 }
 
 const VALID_UI_TYPES = new Set(["table", "chart", "card", "button"]);
@@ -336,6 +344,20 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
     };
   }
 
+  if (actionType === "call_skill") {
+    const skill = asString(actionRow.skill);
+    if (!validateSkillCallInput(skill)) {
+      return null;
+    }
+
+    return {
+      type: "call_skill",
+      intent,
+      skill,
+      rationale: asString(actionRow.rationale) || undefined,
+    };
+  }
+
   return null;
 }
 
@@ -378,7 +400,7 @@ export async function decideNextAgentAction(
     "PRIOR OBSERVATIONS are authoritative. Read them carefully before choosing the next action.",
     "If the CURRENT OBSERVATION fully answers the user request, your next action must be respond.",
     "Do not repeat a tool call when the current observation already contains the answer or when an equivalent result is already available from the same tool.",
-    `Available skills:\n${skillSummaryLines || "(none)"}`,
+    `Available specialist skills:\n${specialistSkillSummaryLines || "(none)"}`,
     `Available tools:\n${toolsList || "(none)"}`,
     `Prior observations (${steps.length}):\n${stepSummary}`,
     history.length > 0

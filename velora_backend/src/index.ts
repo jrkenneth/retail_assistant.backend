@@ -7,11 +7,13 @@ import { requestLogger } from "./middleware/requestLogger.js";
 import { authMiddleware } from "./middleware/auth.js";
 import healthRoutes from "./routes/health.js";
 import authRoutes from "./routes/auth.js";
-import employeeRoutes from "./routes/employees.js";
-import leaveRoutes from "./routes/leave.js";
-import payrollRoutes from "./routes/payroll.js";
-import performanceRoutes from "./routes/performance.js";
-import historyRoutes from "./routes/history.js";
+import customerRoutes from "./routes/customers.js";
+import productRoutes from "./routes/products.js";
+import orderRoutes from "./routes/orders.js";
+import returnRoutes from "./routes/returns.js";
+import supportTicketRoutes from "./routes/supportTickets.js";
+import loyaltyRoutes from "./routes/loyalty.js";
+import policyRoutes from "./routes/policies.js";
 
 dotenv.config();
 
@@ -21,13 +23,15 @@ app.use(express.json());
 app.use(requestLogger);
 
 app.use("/health", healthRoutes);
-app.use("/api/v1", authMiddleware);
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/employees", employeeRoutes);
-app.use("/api/v1/leave", leaveRoutes);
-app.use("/api/v1/payroll", payrollRoutes);
-app.use("/api/v1/performance", performanceRoutes);
-app.use("/api/v1/history", historyRoutes);
+app.use("/api/v1", authMiddleware);
+app.use("/api/v1/customers", customerRoutes);
+app.use("/api/v1/products", productRoutes);
+app.use("/api/v1/orders", orderRoutes);
+app.use("/api/v1/returns", returnRoutes);
+app.use("/api/v1/support-tickets", supportTicketRoutes);
+app.use("/api/v1/loyalty", loyaltyRoutes);
+app.use("/api/v1/policies", policyRoutes);
 app.use((_req, _res, next) => next(notFound("Resource not found")));
 
 app.use(errorHandler);
@@ -38,7 +42,7 @@ async function start() {
   try {
     await db.raw("select 1");
     app.listen(port, () => {
-      console.log(`Aletia HR Platform listening on port ${port}`);
+      console.log(`Velora Backend listening on port ${port}`);
     });
   } catch (error) {
     console.error("Failed to start application", error);

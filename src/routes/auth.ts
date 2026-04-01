@@ -1,12 +1,11 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { aletiaAdapter } from "../adapters/aletia/aletiaAdapter.js";
+import { veloraAdapter } from "../adapters/velora/veloraAdapter.js";
 import { authenticateToken } from "../auth/authenticateToken.js";
 import { signAuthToken } from "../auth/jwt.js";
 import { addToBlacklist } from "../auth/tokenBlacklist.js";
 import type { AuthenticatedUser } from "../auth/types.js";
-import { mapAccessRole } from "../rbac/roleMapping.js";
 import { asyncRoute } from "./routeUtils.js";
 
 const loginSchema = z.object({
@@ -14,12 +13,12 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-const employeeProfileSchema = z.object({
-  employee_number: z.string(),
+const customerProfileSchema = z.object({
+  customer_number: z.string(),
   full_name: z.string(),
-  role: z.string(),
-  department: z.string(),
-  entity: z.string(),
+  email: z.string().email(),
+  account_status: z.string(),
+  loyalty_points: z.coerce.number(),
 });
 
 function normalizeAuthErrorMessage(error: unknown): string {
@@ -48,11 +47,15 @@ authRouter.post("/login", loginRateLimiter, asyncRoute(async (req, res) => {
   const payload = loginSchema.parse(req.body);
 
   try {
-    const result = await aletiaAdapter.execute("authenticate_user", payload);
-    const employee = employeeProfileSchema.parse(result.data);
+    const result = await veloraAdapter.execute("authenticate_customer", payload);
+    const customer = customerProfileSchema.parse(result.data);
     const user = {
-      ...employee,
-      access_role: mapAccessRole(employee.role, employee.department),
+      ...customer,
+      employee_number: customer.customer_number,
+      role: "Customer",
+      access_role: "customer",
+      department: "Customers",
+      entity: "Velora",
     } satisfies AuthenticatedUser;
     const token = signAuthToken(user);
 

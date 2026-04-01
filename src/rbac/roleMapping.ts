@@ -8,6 +8,10 @@ export function mapAccessRole(jobTitle: string, department: string): AccessRole 
   const normalizedTitle = normalize(jobTitle);
   const normalizedDepartment = normalize(department);
 
+  if (normalizedTitle === "customer" || normalizedDepartment === "customers") {
+    return "customer";
+  }
+
   if (normalizedDepartment === "human resources" && normalizedTitle.includes("admin")) {
     return "admin";
   }

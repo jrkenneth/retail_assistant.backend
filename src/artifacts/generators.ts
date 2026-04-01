@@ -486,7 +486,7 @@ async function exportPptx(filePath: string, title: string, content: PptxArtifact
 
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
-  pptx.author = "Rogers Copilot";
+  pptx.author = "Lena";
   pptx.subject = title;
   pptx.title = title;
   const theme = resolvePptxTheme(content);
@@ -612,7 +612,7 @@ function normalizeWorkbookCell(value: unknown): unknown {
 
 async function exportXlsx(filePath: string, content: XlsxArtifactContent): Promise<void> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Rogers Copilot";
+  workbook.creator = "Lena";
   workbook.title = content.workbookTitle ?? "Generated workbook";
 
   for (const sheet of content.sheets) {

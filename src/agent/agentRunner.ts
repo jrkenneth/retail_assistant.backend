@@ -16,7 +16,13 @@ import {
   withTimeout,
 } from "../chat/runtimePolicy.js";
 import { buildSystemPrompt, type ModeOptions } from "./systemPrompt.js";
-import { skillRegistry, type SkillName } from "./skillRegistry.js";
+import {
+  CORE_SKILL_NAMES,
+  skillRegistry,
+  type SkillName,
+  type SpecialistSkillName,
+  SPECIALIST_SKILL_NAMES,
+} from "./skillRegistry.js";
 import { createToolRegistry, resolveAllowedTools, skillToolAccess, type ToolExecutor, type ToolName } from "./toolRegistry.js";
 import { decideNextAgentAction } from "./llmPlanner.js";
 import { routeRequest } from "./router.js";
@@ -103,20 +109,20 @@ function getLatestUserSafeError(steps: AgentStepResult[]): string | null {
 }
 
 function formatUserSafeToolError(tool: ToolName, errorMessage: string): string {
-  if (tool === "execute_query") {
+    if (tool === "execute_query") {
     if (errorMessage.includes("connection refused")) {
-      return "I can't reach the Aletia HR Platform right now. Please check that the service is running and try again.";
+      return "I can't reach the Velora platform right now. Please check that the service is running and try again.";
     }
     if (errorMessage.includes("request timed out")) {
-      return "The Aletia HR Platform is not responding right now. Please try again in a moment.";
+      return "The Velora platform is not responding right now. Please try again in a moment.";
     }
     if (errorMessage.includes("authentication failed")) {
-      return "I couldn't access the Aletia HR Platform because the connection credentials appear to be invalid.";
+      return "I couldn't access the Velora platform because the connection credentials appear to be invalid.";
     }
     if (errorMessage.includes("bad request") || errorMessage.includes("invalid filter")) {
-      return "I couldn't complete that HR lookup because the request details were invalid.";
+      return "I couldn't complete that Velora lookup because the request details were invalid.";
     }
-    return "I couldn't complete that HR lookup because the Aletia service returned an error.";
+    return "I couldn't complete that lookup because the Velora service returned an error.";
   }
 
   if (tool === "search_api") {
@@ -144,7 +150,7 @@ function isSimpleLookupPrompt(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   const hasLookupIntent =
     /\b(show|list|find|get|give me|who is|who are|what is|tell me|display)\b/.test(normalized) &&
-    /\b(employee|employees|leave|payroll|salary|performance|review|employment history|career history|hr system)\b/.test(normalized);
+    /\b(product|products|order|orders|tracking|delivery|shipment|return|refund|ticket|support|loyalty|policy|policies|warranty)\b/.test(normalized);
 
   if (!hasLookupIntent) {
     return false;
@@ -187,7 +193,7 @@ function getCompletionDirective(prompt: string, outcome: ToolOutcome): Completio
       const service =
         typeof payload.service === "string" && payload.service.trim()
           ? payload.service.trim()
-          : "the HR system";
+          : "the Velora service";
       return {
         forceRespond: true,
         message: `Yes, ${service} is up and responding normally.`,
@@ -199,18 +205,18 @@ function getCompletionDirective(prompt: string, outcome: ToolOutcome): Completio
         return {
           forceRespond: true,
           message:
-            "I can't reach the Aletia HR Platform right now. Please check that the service is running and try again.",
+            "I can't reach the Velora platform right now. Please check that the service is running and try again.",
         };
       }
       if (outcome.errorMessage?.includes("request timed out")) {
         return {
           forceRespond: true,
-          message: "The Aletia HR Platform is not responding right now. Please try again in a moment.",
+          message: "The Velora platform is not responding right now. Please try again in a moment.",
         };
       }
       return {
         forceRespond: true,
-        message: "I couldn't confirm the HR system status right now because the Aletia service returned an error.",
+        message: "I couldn't confirm the system status right now because the Velora service returned an error.",
       };
     }
 
@@ -320,7 +326,7 @@ async function executeToolWithRetry(
 
 const TOOL_STATUS_MESSAGES: Partial<Record<string, string>> = {
   search_api: "Searching the web...",
-  execute_query: "Querying HR data...",
+  execute_query: "Checking Velora data...",
 };
 
 const RESPONSE_STATUS_MESSAGE = "Collating response...";
@@ -493,18 +499,34 @@ export async function runAgent(
   };
 
   const getUnlockedTools = (): ToolName[] => {
-    const unlockedTools = Array.from(
-      loadedSkills,
-      (skill) => skillToolAccess[skill] ?? [],
-    ).flat();
+    const unlockedTools = Array.from(loadedSkills)
+      .flatMap((skill) =>
+        skill in skillToolAccess ? skillToolAccess[skill as SpecialistSkillName] ?? [] : [],
+      );
+    const baselineTools = activeModes.research && allowedTools.includes("search_api")
+      ? ["search_api" as ToolName]
+      : [];
+    const allUnlocked = [...baselineTools, ...unlockedTools];
 
     return allowedTools.filter((tool, index, list) =>
-      unlockedTools.includes(tool) && list.indexOf(tool) === index,
+      allUnlocked.includes(tool) && list.indexOf(tool) === index,
     );
   };
 
   const getCurrentSystemPrompt = () =>
-    buildSystemPrompt(activeModes, allowedTools, Array.from(loadedSkills), user);
+    buildSystemPrompt(
+      activeModes,
+      allowedTools,
+      Array.from(loadedSkills).filter(
+        (skill): skill is SpecialistSkillName =>
+          SPECIALIST_SKILL_NAMES.includes(skill as SpecialistSkillName),
+      ),
+      user,
+    );
+
+  for (const coreSkill of CORE_SKILL_NAMES) {
+    loadSkill(coreSkill);
+  }
 
   for (const selectedSkill of routedCapabilities.skills) {
     loadSkill(selectedSkill);
@@ -532,6 +554,11 @@ export async function runAgent(
 
     if (!nextAction) {
       break;
+    }
+
+    if (nextAction.type === "call_skill") {
+      loadSkill(nextAction.skill, true);
+      continue;
     }
 
     if (nextAction.type === "call_tool") {
@@ -638,10 +665,6 @@ export async function runAgent(
     }
 
     if (nextAction.type === "artefact") {
-      if (!loadedSkills.has("artefact_design")) {
-        loadSkill("artefact_design", true);
-        continue;
-      }
       onStatus?.("artefact", "Generating document...");
       await applyArtifactAction(nextAction, { phase: "unified_loop" }, "agent.artefact.failed_unified");
       break;

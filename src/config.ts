@@ -24,8 +24,10 @@ const envSchema = z.object({
   TAVILY_API_KEY: z.string().optional(),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
   SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
-  ALETIA_API_URL: z.string().default("http://localhost:4001"),
-  ALETIA_API_KEY: z.string().default(""),
+  VELORA_API_URL: z.string().default(process.env.ALETIA_API_URL ?? "http://localhost:4001"),
+  VELORA_API_KEY: z.string().default(process.env.ALETIA_API_KEY ?? ""),
+  ALETIA_API_URL: z.string().optional(),
+  ALETIA_API_KEY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

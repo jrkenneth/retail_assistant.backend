@@ -1,6 +1,7 @@
 import type { ChatResponse } from "../chat/contracts.js";
 import type { ArtifactType } from "../artifacts/types.js";
 import type { ToolName } from "./toolRegistry.js";
+import type { SpecialistSkillName } from "./skillRegistry.js";
 
 export type AgentToolInput = string | Record<string, unknown>;
 
@@ -31,6 +32,12 @@ export type AgentStepResult = {
 };
 
 export type AgentAction =
+  | {
+      type: "call_skill";
+      intent: string;
+      skill: SpecialistSkillName;
+      rationale?: string;
+    }
   | {
       type: "call_tool";
       intent: string;

@@ -3,8 +3,8 @@ import type { ToolContext, ToolResult } from "../tools/types.js";
 import { executeQueryClient } from "../tools/executeQueryTool.js";
 import { searchClient } from "../tools/searchClient.js";
 import type { AgentToolInput } from "./types.js";
-import type { SkillName } from "./skillRegistry.js";
 import type { ModeOptions } from "./systemPrompt.js";
+import type { SpecialistSkillName } from "./skillRegistry.js";
 
 export function createToolRegistry(_user: AuthenticatedUser) {
   return {
@@ -35,70 +35,74 @@ export type ToolPlannerGuide = {
 export const toolDescriptions: Record<ToolName, string> = {
   search_api: "Searches external/public sources and returns high-level hits.",
   execute_query:
-    "Executes structured queries against supported business data domains with server-side RBAC enforcement. Supported domains: hr, rbac.",
+    "Executes structured queries against Velora retail data with server-side customer scope enforcement. Supported domains: commerce and rbac.",
 };
 
 export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
   search_api: {
     examples: [
       {
-        user_request: "Find recent Basel III updates",
-        tool_input: "Basel III latest updates",
+        user_request: "Find recent ecommerce returns benchmark data",
+        tool_input: "ecommerce returns benchmark latest",
       },
     ],
   },
   execute_query: {
     valid_intents: [
-      "query_employees",
-      "get_employee_profile",
-      "get_employee_summary",
-      "query_leave",
-      "get_leave_balance",
-      "query_payroll",
-      "get_employee_payroll",
-      "query_performance",
-      "get_employee_performance",
-      "get_employment_history",
+      "get_customer_profile",
+      "query_products",
+      "get_product_detail",
+      "query_orders",
+      "get_order_detail",
+      "query_returns",
+      "get_return_detail",
+      "query_support_tickets",
+      "get_support_ticket",
+      "create_support_ticket",
+      "get_loyalty_summary",
+      "query_policy_documents",
+      "get_policy_document",
       "health_check",
       "create_access_request",
     ],
     examples: [
       {
-        user_request: "Show me employee EMP-007",
+        user_request: "Track my order ZX123456789",
         tool_input: {
-          domain: "hr",
-          intent: "get_employee_profile",
-          params: { employee_number: "EMP-007" },
+          domain: "commerce",
+          intent: "query_orders",
+          params: {},
+          filters: { tracking_number: "ZX123456789", limit: 20 },
+        },
+      },
+      {
+        user_request: "Show me the Premium Wireless Headphones Model X",
+        tool_input: {
+          domain: "commerce",
+          intent: "query_products",
+          params: {},
+          filters: { search: "Premium Wireless Headphones Model X", limit: 20 },
+        },
+      },
+      {
+        user_request: "What is Velora's returns policy?",
+        tool_input: {
+          domain: "commerce",
+          intent: "get_policy_document",
+          params: { policy_key: "returns_policy" },
           filters: {},
         },
       },
       {
-        user_request: "Show me employee Vikash Foolchand",
+        user_request: "Escalate this delayed delivery to support",
         tool_input: {
-          domain: "hr",
-          intent: "query_employees",
-          params: {},
-          filters: { full_name: "Vikash Foolchand", limit: 50 },
-        },
-      },
-      {
-        user_request: "Show me payroll for the Finance department",
-        tool_input: {
-          domain: "hr",
-          intent: "query_payroll",
-          params: {},
-          filters: { department_name: "Finance", limit: 50 },
-        },
-      },
-      {
-        user_request: "Raise an access request for payroll details",
-        tool_input: {
-          domain: "rbac",
-          intent: "create_access_request",
+          domain: "commerce",
+          intent: "create_support_ticket",
           params: {
-            requested_by: "EMP-011",
-            resource_requested: "Payroll details for Finance department",
-            justification: "Need access to support monthly finance review",
+            order_number: "RT-99283",
+            subject: "Delayed delivery investigation",
+            description: "Customer reported delivered status without receiving the parcel.",
+            priority: "high",
           },
           filters: {},
         },
@@ -107,8 +111,6 @@ export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
   },
 };
 
-// OpenAI function-calling schemas for native bindTools() integration.
-// Keep in sync with toolRegistry keys and toolDescriptions.
 export const toolSchemas = [
   {
     type: "function" as const,
@@ -133,13 +135,13 @@ export const toolSchemas = [
     function: {
       name: "execute_query",
       description:
-        "Execute a query against an external data domain. Use this tool when you need to retrieve HR data from the Aletia platform. Supported domains: hr. Use the active routed HR guidance to determine the correct intent, params, and filters before calling this tool.",
+        "Execute a query against an external Velora retail data domain. Supported domains: commerce and rbac.",
       parameters: {
         type: "object",
         properties: {
           domain: {
             type: "string",
-            enum: ["hr", "rbac"],
+            enum: ["commerce", "rbac"],
             description: "The data domain to query.",
           },
           intent: {
@@ -148,12 +150,12 @@ export const toolSchemas = [
           },
           params: {
             type: "object",
-            description: "Path-level parameters such as employee_number.",
+            description: "Path-level parameters such as order_number, sku, or policy_key.",
             additionalProperties: true,
           },
           filters: {
             type: "object",
-            description: "Query-level filters such as department_name, status, department_id, date ranges, limit, and page.",
+            description: "Query-level filters such as tracking_number, status, search, category, limit, and page.",
             additionalProperties: true,
           },
         },
@@ -163,10 +165,14 @@ export const toolSchemas = [
   },
 ] as const;
 
-export const skillToolAccess: Partial<Record<SkillName, ToolName[]>> = {
-  web_research: ["search_api"],
-  artefact_design: [],
-  querydb: ["execute_query"],
+export const skillToolAccess: Partial<Record<SpecialistSkillName, ToolName[]>> = {
+  product_enquiry_skill: ["execute_query"],
+  order_management_skill: ["execute_query"],
+  returns_skill: ["execute_query"],
+  loyalty_skill: ["execute_query"],
+  policy_rag_skill: ["execute_query"],
+  escalation_skill: ["execute_query"],
+  governance_skill: [],
 };
 
 export function resolveAllowedTools(modes: ModeOptions): ToolName[] {

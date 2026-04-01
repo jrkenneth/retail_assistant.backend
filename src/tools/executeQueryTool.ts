@@ -1,66 +1,94 @@
-// Enforces deterministic RBAC before and after structured domain queries.
-
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { aletiaAdapter } from "../adapters/aletia/aletiaAdapter.js";
 import { sanitizeAccessRequestInput } from "../accessRequests/sanitizeAccessRequest.js";
+import { veloraAdapter } from "../adapters/velora/veloraAdapter.js";
 import { logAuditEvent } from "../audit/auditLogger.js";
 import type { AuthenticatedUser } from "../auth/types.js";
 import { env } from "../config.js";
 import { createAccessRequest } from "../db/repositories/accessRequestsRepo.js";
 import { COLUMN_POLICY, HARD_BLOCKED_COLUMNS } from "../rbac/columnPolicy.js";
-import { mapAccessRole } from "../rbac/roleMapping.js";
 import type { ToolContext, ToolResult, ToolResultKind } from "./types.js";
 
 const executeQuerySchema = z.object({
-  domain: z.enum(["hr", "rbac"]).describe("The data domain to query"),
-  intent: z
-    .string()
-    .describe("The query intent - must match a valid intent for the specified domain"),
-  params: z
-    .record(z.any())
-    .optional()
-    .default({})
-    .describe("Path-level parameters such as employee_number"),
-  filters: z
-    .record(z.any())
-    .optional()
-    .default({})
-    .describe("Query-level filters such as status, department_id, date ranges, limit, page"),
+  domain: z.enum(["commerce", "rbac"]).describe("The data domain to query"),
+  intent: z.string().describe("The query intent for the specified domain"),
+  params: z.record(z.any()).optional().default({}),
+  filters: z.record(z.any()).optional().default({}),
 });
 
-const DEPARTMENT_SCOPED_INTENTS = new Set([
-  "query_employees",
-  "query_leave",
-  "query_performance",
-]);
-
-const SELF_SERVICE_INTENTS = new Set([
-  "get_employee_profile",
-  "get_employee_summary",
-  "query_leave",
-  "get_leave_balance",
-  "get_employee_payroll",
-  "get_employee_performance",
-  "get_employment_history",
+const CUSTOMER_SCOPED_INTENTS = new Set([
+  "get_customer_profile",
+  "query_orders",
+  "get_order_detail",
+  "query_returns",
+  "get_return_detail",
+  "query_support_tickets",
+  "get_support_ticket",
+  "create_support_ticket",
+  "get_loyalty_summary",
 ]);
 
 type QueryPayload = z.infer<typeof executeQuerySchema>;
-type ScopeViolationReason = {
-  reason: string;
-};
 
-const employeeStatusSchema = z.object({
+const customerStatusSchema = z.object({
   data: z.object({
-    is_active: z.boolean(),
-    role: z.string(),
-    department: z.string(),
-    entity: z.string(),
+    account_status: z.string(),
+    loyalty_points: z.coerce.number(),
+    email: z.string(),
+    full_name: z.string(),
+    customer_number: z.string(),
   }),
 });
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function makeAccessDenied(reason = "This request is not permitted for the current customer account.") {
+  return {
+    access_denied: true,
+    reason,
+  };
+}
+
+function ensureUser(context?: ToolContext): AuthenticatedUser {
+  if (!context?.user) {
+    throw new Error("execute_query requires authenticated user context.");
+  }
+  return context.user;
+}
+
+async function refreshUserContext(user: AuthenticatedUser): Promise<{
+  isActive: boolean;
+  user: AuthenticatedUser;
+}> {
+  const statusResult = await veloraAdapter.execute("validate_customer_status", {
+    customer_number: user.customer_number,
+  });
+
+  if (statusResult.not_found === true) {
+    return { isActive: false, user };
+  }
+
+  const parsed = customerStatusSchema.parse(statusResult);
+  const refreshedUser: AuthenticatedUser = {
+    ...user,
+    customer_number: parsed.data.customer_number,
+    employee_number: parsed.data.customer_number,
+    full_name: parsed.data.full_name,
+    email: parsed.data.email,
+    account_status: parsed.data.account_status,
+    loyalty_points: parsed.data.loyalty_points,
+    role: "Customer",
+    access_role: "customer",
+    department: "Customers",
+    entity: "Velora",
+  };
+
+  return {
+    isActive: parsed.data.account_status === "active",
+    user: refreshedUser,
+  };
 }
 
 function inferExecuteQueryResultKind(
@@ -80,11 +108,11 @@ function inferExecuteQueryResultKind(
 
 function buildExecuteQuerySummary(intent: string, payload: Record<string, unknown>): string {
   if (payload.access_denied === true) {
-    return "Access was denied for this request.";
+    return "Access to that retail record was denied.";
   }
 
   if (intent === "health_check" && payload.status === "ok") {
-    return "Confirmed Aletia HR service availability.";
+    return "Confirmed Velora service availability.";
   }
 
   const rows = Array.isArray(payload.rows)
@@ -94,11 +122,19 @@ function buildExecuteQuerySummary(intent: string, payload: Record<string, unknow
       : null;
 
   if (rows) {
-    return `Retrieved ${rows.length} HR records for ${intent}.`;
+    return `Retrieved ${rows.length} Velora records for ${intent}.`;
   }
 
   if (payload.not_found === true) {
-    return `No HR record was found for ${intent}.`;
+    return `No Velora record was found for ${intent}.`;
+  }
+
+  if (
+    intent === "create_support_ticket" &&
+    isPlainObject(payload.data) &&
+    typeof payload.data.ticket_number === "string"
+  ) {
+    return `Created support ticket ${payload.data.ticket_number}.`;
   }
 
   if (
@@ -109,191 +145,19 @@ function buildExecuteQuerySummary(intent: string, payload: Record<string, unknow
     return `Created access request ${payload.data.reference_number}.`;
   }
 
-  return `Retrieved HR data for ${intent}.`;
-}
-
-function makeAccessDenied(reason = "Your role does not permit access to this data."): Record<string, unknown> {
-  return {
-    access_denied: true,
-    reason,
-  };
-}
-
-function getEffectiveAccessRole(user: AuthenticatedUser) {
-  return user.access_role ?? mapAccessRole(user.role, user.department);
-}
-
-function ensureUser(context?: ToolContext): AuthenticatedUser {
-  if (!context?.user) {
-    throw new Error("execute_query requires authenticated user context.");
-  }
-  return context.user;
-}
-
-async function refreshUserContext(user: AuthenticatedUser): Promise<{
-  isActive: boolean;
-  user: AuthenticatedUser;
-}> {
-  const statusResult = await aletiaAdapter.execute("validate_employee_status", {
-    employee_number: user.employee_number,
-  });
-
-  if (statusResult.not_found === true) {
-    return { isActive: false, user };
-  }
-
-  const parsed = employeeStatusSchema.parse(statusResult);
-  const refreshedUser = {
-    ...user,
-    role: parsed.data.role,
-    department: parsed.data.department,
-    entity: parsed.data.entity,
-    access_role: mapAccessRole(parsed.data.role, parsed.data.department),
-  } satisfies AuthenticatedUser;
-
-  return {
-    isActive: parsed.data.is_active,
-    user: refreshedUser,
-  };
-}
-
-function enforceScope(
-  payload: QueryPayload,
-  user: AuthenticatedUser,
-): {
-  params: Record<string, unknown>;
-  filters: Record<string, unknown>;
-  scopeViolations: ScopeViolationReason[];
-} {
-  const params = { ...payload.params };
-  const filters = { ...payload.filters };
-  const accessRole = getEffectiveAccessRole(user);
-  const scopeViolations: ScopeViolationReason[] = [];
-
-  // NOTE: Any future edits to these scope overrides must be security-audited.
-
-  if (SELF_SERVICE_INTENTS.has(payload.intent)) {
-    const suppliedEmployeeParam =
-      typeof payload.params.employee_number === "string" ? payload.params.employee_number.trim() : "";
-    const suppliedEmployeeFilter =
-      typeof payload.filters.employee_number === "string" ? payload.filters.employee_number.trim() : "";
-
-    if (
-      (suppliedEmployeeParam && suppliedEmployeeParam !== user.employee_number) ||
-      (suppliedEmployeeFilter && suppliedEmployeeFilter !== user.employee_number)
-    ) {
-      scopeViolations.push({
-        reason: "Self-service scope override replaced an LLM-supplied employee identifier.",
-      });
-    }
-
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    params.employee_number = user.employee_number;
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    filters.employee_number = user.employee_number;
-
-    return { params, filters, scopeViolations };
-  }
-
-  if (accessRole === "employee") {
-    const suppliedEmployeeParam =
-      typeof payload.params.employee_number === "string" ? payload.params.employee_number.trim() : "";
-    const suppliedEmployeeFilter =
-      typeof payload.filters.employee_number === "string" ? payload.filters.employee_number.trim() : "";
-
-    if (
-      (suppliedEmployeeParam && suppliedEmployeeParam !== user.employee_number) ||
-      (suppliedEmployeeFilter && suppliedEmployeeFilter !== user.employee_number)
-    ) {
-      scopeViolations.push({
-        reason: "Employee scope override replaced an LLM-supplied employee identifier.",
-      });
-    }
-
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    params.employee_number = user.employee_number;
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    filters.employee_number = user.employee_number;
-  }
-
-  if (accessRole === "manager") {
-    const suppliedDepartmentParam =
-      typeof payload.params.department === "string" ? payload.params.department.trim() : "";
-    const suppliedDepartmentFilter =
-      typeof payload.filters.department_name === "string"
-        ? payload.filters.department_name.trim()
-        : typeof payload.filters.department === "string"
-          ? payload.filters.department.trim()
-          : "";
-
-    if (
-      (suppliedDepartmentParam && suppliedDepartmentParam !== user.department) ||
-      (suppliedDepartmentFilter && suppliedDepartmentFilter !== user.department)
-    ) {
-      scopeViolations.push({
-        reason: "Manager scope override replaced an LLM-supplied department.",
-      });
-    }
-
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    params.department = user.department;
-    // SECURITY: unconditional override — LLM-supplied value is never trusted for scope
-    filters.department_name = user.department;
-  }
-
-  if (accessRole === "manager" && !DEPARTMENT_SCOPED_INTENTS.has(payload.intent)) {
-    delete filters.department_name;
-  }
-
-  return { params, filters, scopeViolations };
-}
-
-function recordBelongsToDepartment(record: Record<string, unknown>, department: string): boolean {
-  return typeof record.department === "string" && record.department === department;
-}
-
-function recordBelongsToEmployee(record: Record<string, unknown>, employeeNumber: string): boolean {
-  return typeof record.employee_number === "string" && record.employee_number === employeeNumber;
+  return `Retrieved Velora data for ${intent}.`;
 }
 
 function getDataRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
   if (Array.isArray(payload.data)) {
     return payload.data.filter(isPlainObject);
   }
+
   if (isPlainObject(payload.data)) {
     return [payload.data];
   }
+
   return [];
-}
-
-function verifyPostQueryScope(
-  intent: string,
-  payload: Record<string, unknown>,
-  user: AuthenticatedUser,
-): boolean {
-  const accessRole = getEffectiveAccessRole(user);
-  if (accessRole === "admin" || accessRole === "hr_officer" || intent === "health_check") {
-    return true;
-  }
-
-  const records = getDataRecords(payload);
-  if (records.length === 0) {
-    return true;
-  }
-
-  if (SELF_SERVICE_INTENTS.has(intent)) {
-    return records.every((record) => recordBelongsToEmployee(record, user.employee_number));
-  }
-
-  if (accessRole === "employee") {
-    return records.every((record) => recordBelongsToEmployee(record, user.employee_number));
-  }
-
-  if (accessRole === "manager") {
-    return records.every((record) => recordBelongsToDepartment(record, user.department));
-  }
-
-  return true;
 }
 
 function sanitizeRecord(
@@ -335,7 +199,16 @@ function sanitizePayload(
   const sanitized: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(payload)) {
-    if (key === "meta" || key === "access_denied" || key === "reason" || key === "status" || key === "service" || key === "reference_number" || key === "requested_by" || key === "resource_requested") {
+    if (
+      key === "meta" ||
+      key === "access_denied" ||
+      key === "reason" ||
+      key === "status" ||
+      key === "service" ||
+      key === "reference_number" ||
+      key === "requested_by" ||
+      key === "resource_requested"
+    ) {
       sanitized[key] = value;
       continue;
     }
@@ -358,39 +231,67 @@ function sanitizePayload(
   return sanitized;
 }
 
-function aggregatePayroll(payload: Record<string, unknown>): Record<string, unknown> {
-  const rows = getDataRecords(payload);
-  const grouped = new Map<string, { department: string; currency: string; employee_count: number; total_gross_salary: number }>();
-
-  for (const row of rows) {
-    const department = typeof row.department === "string" ? row.department : "Unknown";
-    const currency = typeof row.currency === "string" ? row.currency : "MUR";
-    const grossSalary = Number(row.gross_salary ?? 0);
-    const key = `${department}:${currency}`;
-    const current = grouped.get(key) ?? {
-      department,
-      currency,
-      employee_count: 0,
-      total_gross_salary: 0,
-    };
-
-    current.employee_count += 1;
-    current.total_gross_salary += grossSalary;
-    grouped.set(key, current);
+function recordBelongsToCustomer(record: Record<string, unknown>, customerNumber: string): boolean {
+  if (typeof record.customer_number === "string") {
+    return record.customer_number === customerNumber;
   }
 
-  return {
-    data: Array.from(grouped.values()).map((row) => ({
-      ...row,
-      average_gross_salary: row.employee_count === 0 ? 0 : Number((row.total_gross_salary / row.employee_count).toFixed(2)),
-    })),
-    meta: {
-      total: grouped.size,
-      page: 1,
-      limit: grouped.size,
-      pages: grouped.size === 0 ? 0 : 1,
-    },
-  };
+  if (Array.isArray(record.items)) {
+    return true;
+  }
+
+  return false;
+}
+
+function verifyPostQueryScope(
+  intent: string,
+  payload: Record<string, unknown>,
+  user: AuthenticatedUser,
+): boolean {
+  if (!CUSTOMER_SCOPED_INTENTS.has(intent)) {
+    return true;
+  }
+
+  const records = getDataRecords(payload);
+  if (records.length === 0) {
+    return true;
+  }
+
+  return records.every((record) => recordBelongsToCustomer(record, user.customer_number));
+}
+
+function enforceScope(
+  payload: QueryPayload,
+  user: AuthenticatedUser,
+): {
+  params: Record<string, unknown>;
+  filters: Record<string, unknown>;
+  scopeViolations: Array<{ reason: string }>;
+} {
+  const params = { ...payload.params };
+  const filters = { ...payload.filters };
+  const scopeViolations: Array<{ reason: string }> = [];
+
+  if (CUSTOMER_SCOPED_INTENTS.has(payload.intent)) {
+    const suppliedCustomerParam =
+      typeof payload.params.customer_number === "string" ? payload.params.customer_number.trim() : "";
+    const suppliedCustomerFilter =
+      typeof payload.filters.customer_number === "string" ? payload.filters.customer_number.trim() : "";
+
+    if (
+      (suppliedCustomerParam && suppliedCustomerParam !== user.customer_number) ||
+      (suppliedCustomerFilter && suppliedCustomerFilter !== user.customer_number)
+    ) {
+      scopeViolations.push({
+        reason: "Customer scope override replaced an LLM-supplied customer identifier.",
+      });
+    }
+
+    params.customer_number = user.customer_number;
+    filters.customer_number = user.customer_number;
+  }
+
+  return { params, filters, scopeViolations };
 }
 
 async function handleRbacIntent(
@@ -422,8 +323,8 @@ async function handleRbacIntent(
   const row = await createAccessRequest({
     id: `access-${timestamp}`,
     referenceNumber,
-    requestedBy: user.employee_number,
-    requestedRole: getEffectiveAccessRole(user),
+    requestedBy: user.customer_number,
+    requestedRole: user.access_role,
     resourceRequested: sanitized.resourceRequested,
     justification: sanitized.justification,
   });
@@ -441,12 +342,12 @@ async function handleRbacIntent(
 export const executeQueryTool = new DynamicStructuredTool({
   name: "execute_query",
   description:
-    "Execute a query against a supported data domain with deterministic server-side RBAC enforcement. Supported domains: hr, rbac. Always call the querydb skill first to understand the correct intent, params, and filters to use before calling this tool.",
+    "Execute a query against a supported Velora retail data domain with deterministic server-side scope enforcement.",
   schema: executeQuerySchema,
   func: async ({ domain, intent, params, filters }) => {
     switch (domain) {
-      case "hr": {
-        const result = await aletiaAdapter.execute(intent, params, filters);
+      case "commerce": {
+        const result = await veloraAdapter.execute(intent, params, filters);
         return JSON.stringify(result);
       }
       default:
@@ -473,7 +374,7 @@ export async function executeQueryClient(
   const user = ensureUser(context);
   const refreshed = await refreshUserContext(user);
   if (!refreshed.isActive) {
-    const denied = makeAccessDenied("Your account is no longer active. Please contact HR.");
+    const denied = makeAccessDenied("This Velora account is not active. Please contact support.");
     return {
       tool: "execute_query",
       version: "v1",
@@ -485,16 +386,14 @@ export async function executeQueryClient(
       },
       citation: {
         label: `domain:${payload.domain}`,
-        source: payload.domain === "rbac" ? "Copilot RBAC" : "Aletia HR Platform",
-        uri: payload.domain === "hr" ? env.ALETIA_API_URL : undefined,
+        source: payload.domain === "rbac" ? "Lena RBAC" : "Velora Platform",
+        uri: payload.domain === "commerce" ? env.VELORA_API_URL : undefined,
       },
     };
   }
 
   const effectiveUser = refreshed.user;
-  const accessRole = getEffectiveAccessRole(effectiveUser);
-  const policy = COLUMN_POLICY[accessRole];
-  const isSelfServiceIntent = SELF_SERVICE_INTENTS.has(payload.intent);
+  const policy = COLUMN_POLICY[effectiveUser.access_role];
 
   if (payload.domain === "rbac") {
     const result = await handleRbacIntent(payload, effectiveUser);
@@ -509,15 +408,15 @@ export async function executeQueryClient(
       },
       citation: {
         label: "domain:rbac",
-        source: "Copilot RBAC",
+        source: "Lena RBAC",
       },
     };
   }
 
-  if (!policy.allowedIntents.includes(payload.intent) && !isSelfServiceIntent) {
+  if (!policy.allowedIntents.includes(payload.intent)) {
     const denied = makeAccessDenied();
     await logAuditEvent({
-      employee_number: effectiveUser.employee_number,
+      employee_number: effectiveUser.customer_number,
       full_name: effectiveUser.full_name,
       role: effectiveUser.access_role,
       event_type: "access_denied",
@@ -527,7 +426,7 @@ export async function executeQueryClient(
         params: payload.params,
         filters: payload.filters,
       },
-      reason: "RBAC policy denied this intent for the current user.",
+      reason: "Retail policy denied this intent for the current customer.",
       ip_address: context?.ipAddress ?? null,
     });
     return {
@@ -540,9 +439,9 @@ export async function executeQueryClient(
         summary: buildExecuteQuerySummary(payload.intent, denied),
       },
       citation: {
-        label: "domain:hr",
-        source: "Aletia HR Platform",
-        uri: env.ALETIA_API_URL,
+        label: "domain:commerce",
+        source: "Velora Platform",
+        uri: env.VELORA_API_URL,
       },
     };
   }
@@ -550,7 +449,7 @@ export async function executeQueryClient(
   const scopedPayload = enforceScope(payload, effectiveUser);
   for (const violation of scopedPayload.scopeViolations) {
     await logAuditEvent({
-      employee_number: effectiveUser.employee_number,
+      employee_number: effectiveUser.customer_number,
       full_name: effectiveUser.full_name,
       role: effectiveUser.access_role,
       event_type: "scope_violation",
@@ -565,13 +464,13 @@ export async function executeQueryClient(
     });
   }
 
-  const rawResult = await aletiaAdapter.execute(payload.intent, scopedPayload.params, scopedPayload.filters);
+  const rawResult = await veloraAdapter.execute(payload.intent, scopedPayload.params, scopedPayload.filters);
   let parsedResult = rawResult as Record<string, unknown>;
 
   if (!verifyPostQueryScope(payload.intent, parsedResult, effectiveUser)) {
     const denied = makeAccessDenied();
     await logAuditEvent({
-      employee_number: effectiveUser.employee_number,
+      employee_number: effectiveUser.customer_number,
       full_name: effectiveUser.full_name,
       role: effectiveUser.access_role,
       event_type: "access_denied",
@@ -585,8 +484,6 @@ export async function executeQueryClient(
       ip_address: context?.ipAddress ?? null,
     });
     parsedResult = denied;
-  } else if (accessRole === "finance_officer" && payload.intent === "query_payroll") {
-    parsedResult = aggregatePayroll(parsedResult);
   }
 
   const sanitizedResult =
@@ -604,9 +501,9 @@ export async function executeQueryClient(
       summary: buildExecuteQuerySummary(payload.intent, sanitizedResult),
     },
     citation: {
-      label: "domain:hr",
-      source: "Aletia HR Platform",
-      uri: env.ALETIA_API_URL,
+      label: "domain:commerce",
+      source: "Velora Platform",
+      uri: env.VELORA_API_URL,
     },
   };
 }

@@ -1,7 +1,7 @@
 {
-  "name": "aletia-backend",
+  "name": "velora-backend",
   "version": "1.0.0",
-  "description": "Mock REST API backend for the Aletia HR Platform demo",
+  "description": "Mock REST API backend for the Velora ecommerce demo",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

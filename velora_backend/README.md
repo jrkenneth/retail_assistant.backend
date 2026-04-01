@@ -1,6 +1,6 @@
-# Aletia HR Platform
+# Velora Backend
 
-Mock REST API backend for a demo HR platform used by Rogers Copilot.
+Mock REST API backend for the Velora ecommerce demo.
 
 ## Stack
 
@@ -47,7 +47,7 @@ The service runs on `http://localhost:4001`.
 PORT=4001
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME=aletia_hr
+DB_NAME=velora_demo
 DB_USER=postgres
 DB_PASSWORD=
 ALETIA_API_KEY=aletia-demo-key-2024
@@ -91,7 +91,7 @@ Example response:
 ```json
 {
   "status": "ok",
-  "service": "Aletia HR Platform",
+  "service": "Velora Backend",
   "timestamp": "2026-03-24T12:00:00.000Z"
 }
 ```

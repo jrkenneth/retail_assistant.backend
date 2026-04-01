@@ -2,40 +2,48 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { env } from "../config.js";
 import { logEvent } from "../chat/logger.js";
 import { extractMessageText, getChatModel } from "./llmClient.js";
-import { VALID_SKILL_NAMES, type SkillName } from "./skillRegistry.js";
+import {
+  SPECIALIST_SKILL_NAMES,
+  VALID_SKILL_NAMES,
+  type SpecialistSkillName,
+} from "./skillRegistry.js";
 import type { ModeOptions } from "./systemPrompt.js";
 
 export type AgentRoute = {
-  skills: SkillName[];
+  skills: SpecialistSkillName[];
   can_answer_directly: boolean;
 };
 
 function fallbackRoute(prompt: string): AgentRoute {
   const normalized = prompt.toLowerCase();
-  const skills = new Set<SkillName>();
+  const skills = new Set<SpecialistSkillName>();
 
-  if (
-    /\b(aletia|employee|employees|leave|payroll|salary|compensation|bonus|performance|review|reviews|employment history|career history|manager|direct reports|department|hr system|hr platform|hr service|availability|uptime)\b/.test(
-      normalized,
-    )
-  ) {
-    skills.add("querydb");
+  if (/\b(product|products|spec|specs|compare|availability|stock|warranty|promotion)\b/.test(normalized)) {
+    skills.add("product_enquiry_skill");
   }
 
-  if (
-    /\b(report|deck|presentation|slides|spreadsheet|xlsx|pptx|docx|pdf|document|memo|brief|one-pager|one pager|proposal|plan|strategy|roadmap)\b/.test(
-      normalized,
-    )
-  ) {
-    skills.add("artefact_design");
+  if (/\b(order|orders|tracking|track|shipment|delivery|delivered|package)\b/.test(normalized)) {
+    skills.add("order_management_skill");
   }
 
-  if (
-    /\b(latest|recent|current|today|news|market|benchmark|trend|trends|web|online|search|research|external)\b/.test(
-      normalized,
-    )
-  ) {
-    skills.add("web_research");
+  if (/\b(return|returns|refund|exchange|return window)\b/.test(normalized)) {
+    skills.add("returns_skill");
+  }
+
+  if (/\b(loyalty|points|reward|rewards)\b/.test(normalized)) {
+    skills.add("loyalty_skill");
+  }
+
+  if (/\b(policy|policies|terms|refund policy|shipping policy|warranty policy|privacy)\b/.test(normalized)) {
+    skills.add("policy_rag_skill");
+  }
+
+  if (/\b(human|specialist|agent|escalate|complaint|angry|upset|frustrated|manager)\b/.test(normalized)) {
+    skills.add("escalation_skill");
+  }
+
+  if (/\b(competitor|competitors|payment|pay now|credit card|another customer|other customer|guarantee|promise)\b/.test(normalized)) {
+    skills.add("governance_skill");
   }
 
   const canAnswerDirectly =
@@ -64,7 +72,10 @@ function parseRoute(raw: string): AgentRoute | null {
     const skills = Array.isArray(parsed.skills)
       ? parsed.skills
           .map((value) => (typeof value === "string" ? value.trim() : ""))
-          .filter((value): value is SkillName => VALID_SKILL_NAMES.has(value))
+          .filter(
+            (value): value is SpecialistSkillName =>
+              VALID_SKILL_NAMES.has(value) && SPECIALIST_SKILL_NAMES.includes(value as SpecialistSkillName),
+          )
       : [];
 
     return {
@@ -88,18 +99,21 @@ export async function routeRequest(
   }
 
   const systemPrompt = [
-    "You are a lightweight capability router for an internal agent.",
+    "You are a lightweight specialist-skill router for Lena, Velora's retail customer service assistant.",
     "Select which specialist skills should be active before the main agent loop begins.",
     "Return JSON only in the form:",
-    '{"skills":["querydb","web_research","artefact_design"],"can_answer_directly":false}',
-    "Choose from these skills only: querydb, web_research, artefact_design.",
+    '{"skills":["product_enquiry_skill","order_management_skill"],"can_answer_directly":false}',
+    `Choose only from these specialist skills: ${SPECIALIST_SKILL_NAMES.join(", ")}.`,
     "Routing guidance:",
-    "- querydb: Aletia HR platform requests, including employee, leave, payroll, performance, employment history, HR system status, Aletia availability, HR platform, or HR service questions.",
-    "- web_research: current events, public web facts, external benchmarks, market trends, recent developments, or online research.",
-    "- artefact_design: requested deliverables like reports, decks, presentations, spreadsheets, memos, briefs, PDFs, DOCX, PPTX, XLSX, or structured documents.",
+    "- product_enquiry_skill: products, specifications, comparisons, warranties, availability, promotions.",
+    "- order_management_skill: order lookup, delivery status, shipment tracking, order summaries.",
+    "- returns_skill: return eligibility, refunds, return windows, return status.",
+    "- loyalty_skill: points balance, loyalty history, earning and redemption questions.",
+    "- policy_rag_skill: policy interpretation requests, especially returns, shipping, warranty, privacy, loyalty, payments.",
+    "- escalation_skill: human handoff requests, sensitive complaints, unresolved delivery/refund issues.",
+    "- governance_skill: competitor questions, payment handling, policy over-promising, privacy or cross-customer requests.",
     "- Multiple skills may be selected when needed.",
     "- Set can_answer_directly=true only for greetings, thanks, simple conversational replies, or other requests that do not need specialist guidance.",
-    "- If the request mentions Aletia, HR platform, HR service, HR system, or service availability, include querydb.",
   ].join("\n");
 
   const userPrompt = [

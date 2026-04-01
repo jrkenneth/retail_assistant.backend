@@ -1,5 +1,5 @@
 {
-  "name": "@copilot/backend",
+  "name": "@velora/backend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -11,6 +11,7 @@
     "db:migrate": "knex migrate:latest --knexfile knexfile.cjs",
     "db:rollback": "knex migrate:rollback --knexfile knexfile.cjs",
     "db:make": "knex migrate:make --knexfile knexfile.cjs",
+    "db:seed": "knex seed:run --knexfile knexfile.cjs",
     "lint": "echo \"backend lint not configured yet\"",
     "test": "npm run typecheck"
   },

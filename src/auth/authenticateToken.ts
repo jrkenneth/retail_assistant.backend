@@ -31,8 +31,12 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
 
     req.auth = claims;
     req.user = {
+      customer_number: claims.customer_number,
       employee_number: claims.employee_number,
       full_name: claims.full_name,
+      email: claims.email,
+      account_status: claims.account_status,
+      loyalty_points: claims.loyalty_points,
       role: claims.role,
       access_role: claims.access_role,
       department: claims.department,

@@ -113,7 +113,7 @@ async function exportPptx(filePath: string, title: string, html: string): Promis
   const slides = parseSlidesFromHtml(html);
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
-  pptx.author = "Rogers Copilot";
+  pptx.author = "Lena";
   pptx.subject = title;
   pptx.title = title;
 
