@@ -1,9 +1,10 @@
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import type { BaseMessage } from "@langchain/core/messages";
+import type { ArtifactType } from "../artifacts/types.js";
+import { materializeArtifactFile } from "../artifacts/generators.js";
+import type { AuthenticatedUser } from "../auth/types.js";
 import { env } from "../config.js";
 import type { ChatRequest } from "../chat/contracts.js";
 import { logEvent } from "../chat/logger.js";
-import { createPresentation } from "../db/repositories/presentationsRepo.js";
+import { createArtifact } from "../db/repositories/artifactsRepo.js";
 import {
   BACKOFF_MS,
   RETRY_ATTEMPTS,
@@ -15,54 +16,237 @@ import {
   withTimeout,
 } from "../chat/runtimePolicy.js";
 import { buildSystemPrompt, type ModeOptions } from "./systemPrompt.js";
-import { getChatModel } from "./llmClient.js";
-import { skillRegistry } from "./skillRegistry.js";
-import { toolRegistry, toolSchemas, type ToolName } from "./toolRegistry.js";
-import { buildAgentPlan, decideNextAgentAction } from "./llmPlanner.js";
-import type { AgentPlan, AgentRunResult, AgentStepResult, AgentUiAction } from "./types.js";
+import { skillRegistry, type SkillName } from "./skillRegistry.js";
+import { createToolRegistry, resolveAllowedTools, skillToolAccess, type ToolExecutor, type ToolName } from "./toolRegistry.js";
+import { decideNextAgentAction } from "./llmPlanner.js";
+import { routeRequest } from "./router.js";
+import type { AgentAction, AgentRunResult, AgentStepResult, AgentToolInput, AgentUiAction } from "./types.js";
+import type { ToolResultEnvelope } from "../tools/types.js";
 
 const makeId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 type ToolOutcome = {
-  status: "success" | "error";
+  status: "success" | "blocked" | "error";
   latencyMs: number;
   attempts: number;
   tool: ToolName;
-  toolInput: string;
-  data: Record<string, unknown>;
+  toolInput: AgentToolInput;
+  data: ToolResultEnvelope<Record<string, unknown>>;
   citation?: { label: string; source: string; uri?: string };
   errorMessage?: string;
 };
 
+type AgentRuntimeDeps = {
+  decideAction?: typeof decideNextAgentAction;
+  executeTool?: (
+    tool: ToolName,
+    toolInput: AgentToolInput,
+    correlationId: string,
+    user: AuthenticatedUser,
+    ipAddress?: string,
+  ) => Promise<ToolOutcome>;
+  persistArtifact?: typeof persistArtifactAction;
+};
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    return `{${entries
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function makeToolCallKey(tool: ToolName, toolInput: AgentToolInput): string {
+  return `${tool}:${stableStringify(toolInput)}`;
+}
+
+function getLastTerminalToolStep(steps: AgentStepResult[]): AgentStepResult | undefined {
+  return [...steps]
+    .reverse()
+    .find(
+      (step) =>
+        !step.tool.startsWith("activated_skill:") &&
+        (step.status === "success" || step.status === "blocked" || step.status === "error"),
+    );
+}
+
+function getLatestUserSafeError(steps: AgentStepResult[]): string | null {
+  const latest = getLastTerminalToolStep(steps);
+  if (!latest || !latest.data || typeof latest.data !== "object") {
+    return null;
+  }
+
+  const candidate = latest.data as {
+    user_safe_error?: unknown;
+    summary?: unknown;
+  };
+
+  if (typeof candidate.user_safe_error === "string" && candidate.user_safe_error.trim()) {
+    return candidate.user_safe_error.trim();
+  }
+
+  if (latest.status === "error" && typeof candidate.summary === "string" && candidate.summary.trim()) {
+    return candidate.summary.trim();
+  }
+
+  return null;
+}
+
+function formatUserSafeToolError(tool: ToolName, errorMessage: string): string {
+  if (tool === "execute_query") {
+    if (errorMessage.includes("connection refused")) {
+      return "I can't reach the Aletia HR Platform right now. Please check that the service is running and try again.";
+    }
+    if (errorMessage.includes("request timed out")) {
+      return "The Aletia HR Platform is not responding right now. Please try again in a moment.";
+    }
+    if (errorMessage.includes("authentication failed")) {
+      return "I couldn't access the Aletia HR Platform because the connection credentials appear to be invalid.";
+    }
+    if (errorMessage.includes("bad request") || errorMessage.includes("invalid filter")) {
+      return "I couldn't complete that HR lookup because the request details were invalid.";
+    }
+    return "I couldn't complete that HR lookup because the Aletia service returned an error.";
+  }
+
+  if (tool === "search_api") {
+    if (errorMessage.includes("timeout")) {
+      return "I couldn't finish the web search right now because the search service timed out.";
+    }
+    return "I couldn't complete the web search right now.";
+  }
+
+  return "I couldn't complete that step right now.";
+}
+
+function getStructuredToolInput(
+  tool: ToolName,
+  toolInput: AgentToolInput,
+): Record<string, unknown> | null {
+  if (tool !== "execute_query" || !toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) {
+    return null;
+  }
+
+  return toolInput as Record<string, unknown>;
+}
+
+function isSimpleLookupPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  const hasLookupIntent =
+    /\b(show|list|find|get|give me|who is|who are|what is|tell me|display)\b/.test(normalized) &&
+    /\b(employee|employees|leave|payroll|salary|performance|review|employment history|career history|hr system)\b/.test(normalized);
+
+  if (!hasLookupIntent) {
+    return false;
+  }
+
+  const complexSignals =
+    /\b(compare|comparison|versus|vs|benchmark|market|current trends|latest|recent|online|web|search|research|report|brief|deck|presentation|combine|merge|summari[sz]e and|and then|along with)\b/.test(
+      normalized,
+    );
+
+  return !complexSignals;
+}
+
+function shouldForceRespondAfterSuccessfulTool(prompt: string, result: ToolOutcome): boolean {
+  if (result.status !== "success") {
+    return false;
+  }
+
+  if (result.data.kind === "status") {
+    return true;
+  }
+
+  if (result.data.kind === "record" || result.data.kind === "list") {
+    return isSimpleLookupPrompt(prompt);
+  }
+
+  return false;
+}
+
+type CompletionDirective = {
+  forceRespond: boolean;
+  message?: string;
+};
+
+function getCompletionDirective(prompt: string, outcome: ToolOutcome): CompletionDirective {
+  if (outcome.data.kind === "status") {
+    const payload = outcome.data.payload;
+
+    if (outcome.status === "success" && payload.status === "ok") {
+      const service =
+        typeof payload.service === "string" && payload.service.trim()
+          ? payload.service.trim()
+          : "the HR system";
+      return {
+        forceRespond: true,
+        message: `Yes, ${service} is up and responding normally.`,
+      };
+    }
+
+    if (outcome.status === "error") {
+      if (outcome.errorMessage?.includes("connection refused")) {
+        return {
+          forceRespond: true,
+          message:
+            "I can't reach the Aletia HR Platform right now. Please check that the service is running and try again.",
+        };
+      }
+      if (outcome.errorMessage?.includes("request timed out")) {
+        return {
+          forceRespond: true,
+          message: "The Aletia HR Platform is not responding right now. Please try again in a moment.",
+        };
+      }
+      return {
+        forceRespond: true,
+        message: "I couldn't confirm the HR system status right now because the Aletia service returned an error.",
+      };
+    }
+
+    return { forceRespond: true };
+  }
+
+  if ((outcome.data.kind === "record" || outcome.data.kind === "list") && shouldForceRespondAfterSuccessfulTool(prompt, outcome)) {
+    return { forceRespond: true };
+  }
+
+  return { forceRespond: false };
+}
+
 function resolveActiveModes(request: ChatRequest): ModeOptions {
   return {
     research: request.context?.modes?.research ?? false,
+    thinking: request.context?.modes?.thinking ?? true,
   };
-}
-
-function resolveAllowedTools(modes: ModeOptions): ToolName[] {
-  return modes.research ? ["search_api"] : [];
 }
 
 async function executeToolWithRetry(
   tool: ToolName,
-  toolInput: string,
+  toolInput: AgentToolInput,
   correlationId: string,
+  user: AuthenticatedUser,
+  ipAddress?: string,
 ): Promise<ToolOutcome> {
   const start = Date.now();
   let attempt = 0;
+  const toolRegistry = createToolRegistry(user);
 
   while (attempt <= RETRY_ATTEMPTS) {
     attempt += 1;
     try {
-      const runTool = toolRegistry[tool] as (q: string) => Promise<{
-        tool: string;
-        version: string;
-        data: Record<string, unknown>;
-        citation?: { label: string; source: string; uri?: string };
-      }>;
-      const result = await withTimeout(runTool(toolInput), TOOL_TIMEOUT_MS);
+      const runTool = toolRegistry[tool] as ToolExecutor;
+      const result = await withTimeout(runTool(toolInput, { correlationId, user, ipAddress }), TOOL_TIMEOUT_MS);
       const elapsed = Date.now() - start;
       logEvent("info", "agent.tool.success", correlationId, {
         tool,
@@ -70,13 +254,20 @@ async function executeToolWithRetry(
         attempt,
         latency_ms: elapsed,
       });
+      const blocked =
+        result.data.payload &&
+        typeof result.data.payload === "object" &&
+        (
+          (result.data.payload as Record<string, unknown>).allowed === false ||
+          (result.data.payload as Record<string, unknown>).access_denied === true
+        );
       return {
-        status: "success",
+        status: blocked ? "blocked" : "success",
         latencyMs: elapsed,
         attempts: attempt,
         tool,
         toolInput,
-        data: result.data as Record<string, unknown>,
+        data: result.data as ToolResultEnvelope<Record<string, unknown>>,
         citation: result.citation,
       };
     } catch (error) {
@@ -94,7 +285,15 @@ async function executeToolWithRetry(
           attempts: attempt,
           tool,
           toolInput,
-          data: {},
+          data: {
+            ok: false,
+            kind: "record",
+            payload: {},
+            user_safe_error: formatUserSafeToolError(
+              tool,
+              error instanceof Error ? error.message : "unknown_error",
+            ),
+          },
           errorMessage: error instanceof Error ? error.message : "unknown_error",
         };
       }
@@ -109,73 +308,94 @@ async function executeToolWithRetry(
     attempts: RETRY_ATTEMPTS + 1,
     tool,
     toolInput,
-    data: {},
+    data: {
+      ok: false,
+      kind: "record",
+      payload: {},
+      user_safe_error: formatUserSafeToolError(tool, "retry_exhausted"),
+    },
     errorMessage: "retry_exhausted",
   };
 }
 
-function sanitizePresentationHtml(html: string): string {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, "").trim();
-}
-
-function isValidPresentationHtml(html: string): boolean {
-  const normalized = html.trim().toLowerCase();
-  if (!normalized.includes("<html") && !normalized.includes("<section")) {
-    return false;
-  }
-  const hasSlide = /<section[^>]*data-slide="\d+"[^>]*>/i.test(html);
-  const hasHeading = /<h2[\s>][\s\S]*?<\/h2>/i.test(html);
-  const hasList = /<ul[\s>][\s\S]*?<\/ul>/i.test(html);
-  return hasSlide && hasHeading && hasList;
-}
-
 const TOOL_STATUS_MESSAGES: Partial<Record<string, string>> = {
-  search_api: "Searching the web…",
+  search_api: "Searching the web...",
+  execute_query: "Querying HR data...",
 };
 
-// ─── Shared artefact persistence helper ───────────────────────────────────────
+const RESPONSE_STATUS_MESSAGE = "Collating response...";
 
-async function persistArtefactAction(
-  action: { document_type: string; title: string; summary: string; html: string },
+function buildToolStepResult(step: number, result: ToolOutcome): AgentStepResult {
+  return {
+    step,
+    tool: result.tool,
+    tool_input: result.toolInput,
+    status: result.status,
+    data: result.data,
+    citation: result.citation,
+    error_message: result.errorMessage,
+  };
+}
+
+async function persistArtifactAction(
+  action: { artifact_type: ArtifactType; title: string; summary: string; content: unknown },
   sessionId: string,
   prompt: string,
   correlationId: string,
   meta: Record<string, unknown>,
 ): Promise<{ message: string; uiActions: AgentUiAction[] }> {
-  const sanitizedHtml = sanitizePresentationHtml(action.html);
-  if (!isValidPresentationHtml(sanitizedHtml)) {
-    return {
-      message:
-        "I generated a presentation but the HTML structure was invalid for presentation rendering. Please retry with a more specific brief.",
-      uiActions: [],
-    };
-  }
-  const presentationId = makeId("pres");
-  await createPresentation({
-    id: presentationId,
+  const artifact = await materializeArtifactFile(action.title, action.artifact_type, action.content);
+  const artifactId = makeId("art");
+  await createArtifact({
+    id: artifactId,
     sessionId,
     title: action.title,
     prompt,
-    htmlContent: sanitizedHtml,
-    metadataJson: { source: "agent_artefact_action", document_type: action.document_type, ...meta },
+    artifactType: action.artifact_type,
+    contentJson: artifact.contentJson,
+    htmlPreview: artifact.htmlPreview,
+    textContent: artifact.textContent,
+    fileName: artifact.fileName,
+    filePath: artifact.filePath,
+    mimeType: artifact.mimeType,
+    metadataJson: { source: "agent_artifact_action", artifact_type: action.artifact_type, ...meta },
   });
-  logEvent("info", "agent.artefact.generated", correlationId, {
-    document_type: action.document_type,
+  logEvent("info", "agent.artifact.generated", correlationId, {
+    artifact_type: action.artifact_type,
     title: action.title,
-    presentation_id: presentationId,
+    artifact_id: artifactId,
+    file_name: artifact.fileName,
     ...meta,
   });
+
+  const downloadAction: AgentUiAction = {
+    id: `action-artifact-download-${artifactId}`,
+    type: "button",
+    title: `Download ${action.title}`,
+    description: `Download the generated ${action.artifact_type.toUpperCase()} file.`,
+    buttonLabel: `Download ${action.artifact_type.toUpperCase()}`,
+    href: `/artifacts/${artifactId}/download`,
+  };
+
+  if (action.artifact_type !== "pdf") {
+    return {
+      message: action.summary,
+      uiActions: [downloadAction],
+    };
+  }
+
   return {
     message: action.summary,
     uiActions: [
       {
-        id: `action-presentation-view-${presentationId}`,
+        id: `action-artifact-view-${artifactId}`,
         type: "button",
-        title: `View Presentation: ${action.title}`,
-        description: "Open generated presentation and export to PDF/PPTX.",
-        buttonLabel: "View Presentation",
-        href: `/viewer/${presentationId}`,
+        title: `View ${action.title}`,
+        description: "Open the generated document preview in the viewer.",
+        buttonLabel: "View Document",
+        href: `/viewer/${artifactId}`,
       },
+      downloadAction,
     ],
   };
 }
@@ -183,14 +403,20 @@ async function persistArtefactAction(
 export async function runAgent(
   request: ChatRequest,
   correlationId: string,
+  user: AuthenticatedUser,
   history: Array<{ role: "user" | "assistant"; text: string }> = [],
   onStatus?: (phase: string, message: string) => void,
+  ipAddress?: string,
+  deps: AgentRuntimeDeps = {},
 ): Promise<AgentRunResult> {
   const startedAt = Date.now();
   const activeModes = resolveActiveModes(request);
-  const allowedTools = resolveAllowedTools(activeModes);
-  const systemPrompt = buildSystemPrompt(activeModes);
+  const modeTools = resolveAllowedTools(activeModes);
+  const allowedTools = ([...modeTools] as ToolName[])
+    .filter((tool, index, list) => list.indexOf(tool) === index)
+    .filter((tool) => (tool === "search_api" ? activeModes.research : true));
   const maxToolCalls = env.AGENT_MAX_TOOL_CALLS;
+  const maxActionLoops = Math.max(maxToolCalls * 2 + 4, 6);
 
   logEvent("info", "agent.mode", correlationId, {
     research: activeModes.research,
@@ -205,267 +431,280 @@ export async function runAgent(
   let finalFollowUp: string | undefined;
   let finalShowSources: boolean | undefined;
   let toolCalls = 0;
-  let skillCalls = 0;
+  let shouldForceRespond = false;
+  const decideAction = deps.decideAction ?? decideNextAgentAction;
+  const executeTool = deps.executeTool ?? executeToolWithRetry;
+  const persistArtifact = deps.persistArtifact ?? persistArtifactAction;
+  const routedCapabilities = await routeRequest(request.prompt, correlationId, history, activeModes);
 
-  // ─── Phase 1: Plan-and-execute ─────────────────────────────────────────────
-  // Ask the LLM once to produce an ordered step plan, then execute it directly
-  // without a per-step planning call. This cuts LLM round-trips from O(N) to 2
-  // for a typical N-tool research task (1 plan call + 1 final synthesis call).
-  // If planning fails or returns null, we fall through to the reactive loop.
+  const applyRespondAction = (action: Extract<AgentAction, { type: "respond" }>) => {
+    finalMessage = action.message_text;
+    finalUiActions = action.ui_actions ?? [];
+    finalSummary = action.summary;
+    finalFollowUp = action.follow_up;
+    finalShowSources = action.show_sources;
+  };
 
-  // Show "Thinking…" only if planning takes longer than the threshold.
-  // This avoids a flash for quick conversational replies while giving genuine
-  // live feedback during longer research planning calls.
-  const THINKING_DELAY_MS = 800;
-  let thinkingTimer: ReturnType<typeof setTimeout> | null = onStatus
-    ? setTimeout(() => { onStatus("thinking", "Thinking…"); thinkingTimer = null; }, THINKING_DELAY_MS)
-    : null;
-
-  const plan: AgentPlan | null = await buildAgentPlan(
-    request.prompt,
-    correlationId,
-    history,
-    allowedTools,
-    systemPrompt,
-  );
-
-  // Cancel the timer if planning returned before the threshold fired.
-  if (thinkingTimer !== null) {
-    clearTimeout(thinkingTimer);
-    thinkingTimer = null;
-  }
-
-  if (plan) {
-    // Only emit "Mapping out steps…" when the plan involves real tool/skill work.
-    // A respond-only plan (conversational reply) needs no further status.
-    const hasWork = plan.steps.some((s) => s.type === "call_skill" || s.type === "call_tool");
-    if (hasWork) {
-      onStatus?.("planning", "Mapping out steps…");
-    }
-    logEvent("info", "agent.plan.executing", correlationId, { intent: plan.intent, total_steps: plan.steps.length });
-
-    for (const plannedStep of plan.steps) {
-      if (Date.now() - startedAt >= TOTAL_REQUEST_BUDGET_MS) break;
-
-      if (plannedStep.type === "call_skill") {
-        const skillEntry = skillRegistry[plannedStep.skill];
-        if (!skillEntry) {
-          logEvent("warn", "agent.skill.not_found", correlationId, { skill: plannedStep.skill });
-          continue;
-        }
-        const skillLabel = plannedStep.skill.replace(/_/g, " ");
-        onStatus?.("skill", `Loading ${skillLabel} skill…`);
-        logEvent("info", "agent.skill.loaded", correlationId, { skill: plannedStep.skill });
-        stepResults.push({
-          step: plannedStep.step,
-          tool: `call_skill:${plannedStep.skill}`,
-          tool_input: plannedStep.skill,
-          status: "success",
-          data: { skill: plannedStep.skill, instructions: skillEntry.instructions },
-        });
-        skillCalls += 1;
-
-      } else if (plannedStep.type === "call_tool") {
-        if (toolCalls >= maxToolCalls) continue;
-        const toolStatusMsg = TOOL_STATUS_MESSAGES[plannedStep.tool] ?? `Running ${plannedStep.tool}…`;
-        onStatus?.("tool", toolStatusMsg);
-        const result = await executeToolWithRetry(plannedStep.tool, plannedStep.tool_input, correlationId);
-        toolCalls += 1;
-        toolResults.push(result);
-        stepResults.push({
-          step: plannedStep.step,
-          tool: result.tool,
-          tool_input: result.toolInput,
-          status: result.status,
-          data: result.data,
-          citation: result.citation,
-          error_message: result.errorMessage,
-        });
-
-      } else if (plannedStep.type === "respond" || plannedStep.type === "artefact") {
-        // Only emit status when there were actual tool/skill steps to collate.
-        // Skip for pure conversational turns (no tool calls = nothing to aggregate).
-        if (stepResults.length > 0) {
-          onStatus?.("responding", "Collating response…");
-        }
-        const action = await decideNextAgentAction(
-          request.prompt,
-          correlationId,
-          history,
-          stepResults,
-          systemPrompt,
-          allowedTools,
-          true, // forceRespond
-        );
-        if (action?.type === "respond") {
-          finalMessage = action.message_text;
-          finalUiActions = action.ui_actions ?? [];
-          finalSummary = action.summary;
-          finalFollowUp = action.follow_up;
-          finalShowSources = action.show_sources;
-        } else if (action?.type === "artefact") {
-          // Synthesis confirmed this is a document — show the appropriate status now.
-          onStatus?.("artefact", "Generating document…");
-          try {
-            const persisted = await persistArtefactAction(
-              action,
-              request.session_id,
-              request.prompt,
-              correlationId,
-              { planned: true },
-            );
-            finalMessage = persisted.message;
-            finalUiActions = persisted.uiActions;
-          } catch (error) {
-            logEvent("warn", "agent.artefact.failed", correlationId, {
-              error_message: error instanceof Error ? error.message : "unknown_error",
-            });
-            finalMessage = "I could not persist the generated presentation artefact right now. Please retry.";
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  // ─── Phase 2: Native tool-calling fallback ────────────────────────────────
-  // Runs when Phase 1 (plan-and-execute) did not produce a final message.
-  // Uses the provider's native tool-call wire format — no JSON-in-text parsing —
-  // for reliable, schema-enforced tool dispatch.
-  // Skills are not exposed as native tools; their instructions are injected into
-  // the SystemMessage of the synthesis call via decideNextAgentAction.
-  if (!finalMessage && allowedTools.length > 0) {
-    const nativeModel = getChatModel();
-    if (nativeModel) {
-      const activeSchemas = toolSchemas.filter((s) =>
-        (allowedTools as string[]).includes(s.function.name),
+  const applyArtifactAction = async (
+    action: Extract<AgentAction, { type: "artefact" }>,
+    meta: Record<string, unknown>,
+    failureEvent: string,
+  ) => {
+    try {
+      const persisted = await persistArtifact(
+        action,
+        request.session_id,
+        request.prompt,
+        correlationId,
+        meta,
       );
-      if (activeSchemas.length > 0) {
-        const modelWithTools = nativeModel.bindTools(activeSchemas);
-        const conv: BaseMessage[] = [
-          new SystemMessage(systemPrompt),
-          new HumanMessage(request.prompt),
-        ];
-
-        while (toolCalls < maxToolCalls) {
-          if (Date.now() - startedAt >= TOTAL_REQUEST_BUDGET_MS) break;
-
-          let nativeResponse: AIMessage;
-          try {
-            nativeResponse = (await modelWithTools.invoke(conv)) as AIMessage;
-          } catch (err) {
-            logEvent("warn", "agent.native.llm_error", correlationId, {
-              error_message: err instanceof Error ? err.message : "unknown_error",
-            });
-            break;
-          }
-
-          type NativeToolCall = { name: string; args: Record<string, unknown>; id: string };
-          const nativeCalls = (nativeResponse.tool_calls ?? []) as NativeToolCall[];
-          if (nativeCalls.length === 0) break; // No tool calls — proceed to synthesis
-
-          conv.push(nativeResponse); // Append AIMessage containing tool_calls
-
-          for (const tc of nativeCalls) {
-            if (toolCalls >= maxToolCalls) break;
-            const toolName = tc.name as ToolName;
-            if (!(allowedTools as string[]).includes(toolName)) continue;
-
-            const toolInput =
-              typeof tc.args.query === "string" ? tc.args.query : JSON.stringify(tc.args);
-            const toolStatusMsg =
-              TOOL_STATUS_MESSAGES[toolName as keyof typeof TOOL_STATUS_MESSAGES] ??
-              `Running ${toolName}…`;
-            onStatus?.("tool", toolStatusMsg);
-
-            const result = await executeToolWithRetry(toolName, toolInput, correlationId);
-            toolCalls += 1;
-            toolResults.push(result);
-            const stepNum = stepResults.length + 1;
-            stepResults.push({
-              step: stepNum,
-              tool: result.tool,
-              tool_input: result.toolInput,
-              status: result.status,
-              data: result.data,
-              citation: result.citation,
-              error_message: result.errorMessage,
-            });
-            conv.push(
-              new ToolMessage({
-                content:
-                  result.status === "success"
-                    ? JSON.stringify(result.data)
-                    : result.errorMessage ?? "Tool returned an error.",
-                tool_call_id: tc.id ?? "unknown",
-              }),
-            );
-          }
-        }
-      }
+      finalMessage = persisted.message;
+      finalUiActions = persisted.uiActions;
+    } catch (error) {
+      logEvent("warn", failureEvent, correlationId, {
+        error_message: error instanceof Error ? error.message : "unknown_error",
+      });
+      finalMessage = "I could not persist the generated document artifact right now. Please retry.";
     }
+  };
+
+  const loadedSkills = new Set<SkillName>();
+  const loadSkill = (skillName: SkillName, announce = false) => {
+    if (loadedSkills.has(skillName)) {
+      return false;
+    }
+    const skillEntry = skillRegistry[skillName];
+    if (!skillEntry) {
+      return false;
+    }
+    loadedSkills.add(skillName);
+    if (announce) {
+      const skillLabel = skillName.replace(/_/g, " ");
+      onStatus?.("skill", `Loading ${skillLabel} skill...`);
+    }
+    stepResults.push({
+      step: stepResults.length + 1,
+      tool: `activated_skill:${skillName}`,
+      tool_input: skillName,
+      status: "success",
+      data: { skill: skillName, instructions: skillEntry.instructions },
+    });
+    return true;
+  };
+
+  const getUnlockedTools = (): ToolName[] => {
+    const unlockedTools = Array.from(
+      loadedSkills,
+      (skill) => skillToolAccess[skill] ?? [],
+    ).flat();
+
+    return allowedTools.filter((tool, index, list) =>
+      unlockedTools.includes(tool) && list.indexOf(tool) === index,
+    );
+  };
+
+  const getCurrentSystemPrompt = () =>
+    buildSystemPrompt(activeModes, allowedTools, Array.from(loadedSkills), user);
+
+  for (const selectedSkill of routedCapabilities.skills) {
+    loadSkill(selectedSkill);
   }
 
-  // ─── Synthesis ─────────────────────────────────────────────────────────────
-  // Always runs if neither Phase 1 nor Phase 2 set finalMessage.
-  // Uses decideNextAgentAction(forceRespond=true) so artefact actions are
-  // preserved regardless of the execution path taken above.
-  if (!finalMessage) {
-    onStatus?.("responding", "Collating response…");
-    const forcedResponse = await decideNextAgentAction(
+  for (let loop = 1; loop <= maxActionLoops; loop += 1) {
+    if (Date.now() - startedAt >= TOTAL_REQUEST_BUDGET_MS || finalMessage) {
+      break;
+    }
+
+    const availableActionTools = getUnlockedTools();
+    const systemPrompt = getCurrentSystemPrompt();
+    onStatus?.("planning", "Thinking...");
+
+    const nextAction = await decideAction(
       request.prompt,
       correlationId,
       history,
       stepResults,
       systemPrompt,
-      allowedTools,
+      availableActionTools,
+      activeModes,
+      false,
+    );
+
+    if (!nextAction) {
+      break;
+    }
+
+    if (nextAction.type === "call_tool") {
+      if (!availableActionTools.includes(nextAction.tool)) {
+        stepResults.push({
+          step: stepResults.length + 1,
+          tool: nextAction.tool,
+          tool_input: nextAction.tool_input,
+          status: "error",
+          data: {
+            ok: false,
+            kind: "record",
+            payload: {},
+            user_safe_error: `Tool "${nextAction.tool}" is not currently unlocked.`,
+          },
+          error_message: `Tool "${nextAction.tool}" is not currently unlocked.`,
+        });
+        continue;
+      }
+
+      if (toolCalls >= maxToolCalls) {
+        stepResults.push({
+          step: stepResults.length + 1,
+          tool: nextAction.tool,
+          tool_input: nextAction.tool_input,
+          status: "error",
+          data: {
+            ok: false,
+            kind: "record",
+            payload: {},
+            user_safe_error: `Tool budget reached (${maxToolCalls}).`,
+          },
+          error_message: `Tool budget reached (${maxToolCalls}).`,
+        });
+        logEvent("info", "agent.tool.budget_reached", correlationId, {
+          tool: nextAction.tool,
+          max_tool_calls: maxToolCalls,
+        });
+        shouldForceRespond = true;
+        break;
+      }
+
+      const toolCallKey = makeToolCallKey(nextAction.tool, nextAction.tool_input);
+      const lastTerminalToolStep = getLastTerminalToolStep(stepResults);
+      const repeatsLatestTerminalToolCall =
+        Boolean(lastTerminalToolStep) &&
+        lastTerminalToolStep?.tool === nextAction.tool &&
+        makeToolCallKey(nextAction.tool, lastTerminalToolStep.tool_input) === toolCallKey;
+      const repeatedTerminalCall = stepResults.find(
+        (step) =>
+          step.tool === nextAction.tool &&
+          (step.status === "success" || step.status === "blocked" || step.status === "error") &&
+          makeToolCallKey(nextAction.tool, step.tool_input) === toolCallKey,
+      );
+
+      if (repeatedTerminalCall) {
+        stepResults.push({
+          step: stepResults.length + 1,
+          tool: nextAction.tool,
+          tool_input: nextAction.tool_input,
+          status: "blocked",
+          data: {
+            ok: false,
+            kind: "record",
+            payload: {},
+            user_safe_error: "Repeated tool call blocked.",
+          },
+          error_message: repeatsLatestTerminalToolCall
+            ? `Skipped repeated tool call because the latest observation already contains the same ${repeatedTerminalCall.status} result.`
+            : `Skipped repeated tool call because the same ${repeatedTerminalCall.status} result is already available.`,
+        });
+        logEvent("info", "agent.tool.repeat_blocked", correlationId, {
+          tool: nextAction.tool,
+          prior_status: repeatedTerminalCall.status,
+          repeated_latest_observation: repeatsLatestTerminalToolCall,
+        });
+        shouldForceRespond = true;
+        break;
+      }
+
+      const toolStatusMessage = TOOL_STATUS_MESSAGES[nextAction.tool] ?? `Running ${nextAction.tool}...`;
+      onStatus?.("tool", toolStatusMessage);
+      const outcome = await executeTool(nextAction.tool, nextAction.tool_input, correlationId, user, ipAddress);
+      const stepResult = buildToolStepResult(stepResults.length + 1, outcome);
+      toolCalls += 1;
+      toolResults.push(outcome);
+      stepResults.push(stepResult);
+      const completionDirective = getCompletionDirective(request.prompt, outcome);
+      if (completionDirective.message) {
+        onStatus?.("responding", RESPONSE_STATUS_MESSAGE);
+        finalMessage = completionDirective.message;
+        break;
+      }
+      if (completionDirective.forceRespond) {
+        logEvent("info", "agent.response.force_after_sufficient_tool_result", correlationId, {
+          tool: outcome.tool,
+          result_kind: outcome.data.kind,
+          tool_calls_used: toolCalls,
+        });
+        shouldForceRespond = true;
+        break;
+      }
+      continue;
+    }
+
+    if (nextAction.type === "artefact") {
+      if (!loadedSkills.has("artefact_design")) {
+        loadSkill("artefact_design", true);
+        continue;
+      }
+      onStatus?.("artefact", "Generating document...");
+      await applyArtifactAction(nextAction, { phase: "unified_loop" }, "agent.artefact.failed_unified");
+      break;
+    }
+
+    if (nextAction.type === "respond") {
+      onStatus?.("responding", RESPONSE_STATUS_MESSAGE);
+      applyRespondAction(nextAction);
+      break;
+    }
+  }
+
+  if (!finalMessage) {
+    const systemPrompt = getCurrentSystemPrompt();
+    onStatus?.("responding", RESPONSE_STATUS_MESSAGE);
+    const forcedResponse = await decideAction(
+      request.prompt,
+      correlationId,
+      history,
+      stepResults,
+      systemPrompt,
+      [],
+      activeModes,
       true,
     );
 
     if (forcedResponse?.type === "respond") {
-      finalMessage = forcedResponse.message_text;
-      finalUiActions = forcedResponse.ui_actions ?? [];
-      finalSummary = forcedResponse.summary;
-      finalFollowUp = forcedResponse.follow_up;
-      finalShowSources = forcedResponse.show_sources;
+      applyRespondAction(forcedResponse);
     } else if (forcedResponse?.type === "artefact") {
-      try {
-        const persisted = await persistArtefactAction(
-          forcedResponse,
-          request.session_id,
-          request.prompt,
-          correlationId,
-          { generated_in_forced_step: true },
-        );
-        finalMessage = persisted.message;
-        finalUiActions = persisted.uiActions;
-      } catch (error) {
-        logEvent("warn", "agent.artefact.failed_forced", correlationId, {
-          error_message: error instanceof Error ? error.message : "unknown_error",
-        });
-        finalMessage =
-          "I could not persist the generated presentation artefact right now. Please retry.";
-      }
+      await applyArtifactAction(
+        forcedResponse,
+        { generated_in_forced_step: true },
+        "agent.artefact.failed_forced",
+      );
     }
   }
 
   if (!finalMessage) {
     finalMessage =
+      getLatestUserSafeError(stepResults) ??
       "I could not complete the request with a valid final response right now. Please retry with a narrower prompt.";
   }
 
-  // Build per-hit citations from all search results so [cite:N] markers in the
-  // message text map to the correct source by zero-based index.
   const citations = stepResults
-    .filter((s) => s.tool === "search_api" && s.status === "success" && Array.isArray(s.data?.hits))
+    .filter(
+      (s) =>
+        s.tool === "search_api" &&
+        s.status === "success" &&
+        s.data?.kind === "search" &&
+        typeof s.data.payload === "object" &&
+        s.data.payload !== null &&
+        Array.isArray((s.data.payload as { hits?: unknown }).hits),
+    )
     .flatMap((s) => {
-      const hits = s.data.hits as Array<{
+      const hits = (s.data.payload as {
+        hits: Array<{
         title?: string;
         snippet?: string;
         url?: string;
         source?: string;
         image?: string;
-      }>;
+        }>;
+      }).hits;
       return hits.map((h) => ({
         label: h.source?.trim() || "Source",
         source: h.title?.trim() || "Untitled",
@@ -475,10 +714,10 @@ export async function runAgent(
     });
 
   const skillTrace = stepResults
-    .filter((s) => s.tool.startsWith("call_skill:"))
+    .filter((s) => s.tool.startsWith("activated_skill:"))
     .map((s) => ({
       tool: s.tool,
-      status: (s.status === "success" ? "success" : "error") as "success" | "error",
+      status: (s.status === "success" ? "success" : s.status === "blocked" ? "blocked" : "error") as "success" | "blocked" | "error",
       latency_ms: 0,
       attempts: 1,
     }));
@@ -487,7 +726,7 @@ export async function runAgent(
     ...skillTrace,
     ...toolResults.map((result) => ({
       tool: result.tool,
-      status: (result.status === "success" ? "success" : "error") as "success" | "error",
+      status: result.status as "success" | "blocked" | "error",
       latency_ms: result.latencyMs,
       attempts: result.attempts,
     })),
@@ -496,7 +735,7 @@ export async function runAgent(
   const hasErrors = toolResults.some((result) => result.status === "error");
 
   return {
-    message_text: hasErrors ? `${finalMessage} (Some tool steps failed. Ref: ${correlationId}.)` : finalMessage,
+    message_text: finalMessage,
     ui_actions: finalUiActions,
     citations,
     tool_trace: trace,
@@ -508,7 +747,7 @@ export async function runAgent(
           {
             reference_id: correlationId,
             user_message: "One or more tool steps failed.",
-            what_i_tried: "I executed model-selected tool steps with timeout/retry controls.",
+            what_i_tried: "I executed model-selected tool steps with timeout/retry controls in a unified loop.",
             next_options: ["Retry now", "Try a narrower prompt"],
           },
         ]

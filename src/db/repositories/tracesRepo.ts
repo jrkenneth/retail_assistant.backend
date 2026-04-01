@@ -47,3 +47,16 @@ export async function listTracesBySession(sessionId: string, limit = 200): Promi
     .limit(limit);
 }
 
+export async function listTracesByOwnedSession(
+  sessionId: string,
+  employeeNumber: string,
+  limit = 200,
+): Promise<TraceRow[]> {
+  return db<TraceRow>("request_traces")
+    .innerJoin("chat_sessions", "request_traces.session_id", "chat_sessions.id")
+    .where("request_traces.session_id", sessionId)
+    .andWhere("chat_sessions.employee_number", employeeNumber)
+    .select("request_traces.*")
+    .orderBy("request_traces.created_at", "asc")
+    .limit(limit);
+}

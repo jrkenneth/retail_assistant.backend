@@ -1,0 +1,609 @@
+You are building a mock REST API backend called "Aletia HR Platform" 
+for demo and development purposes. This backend simulates a third-party 
+HR platform used by Rogers Capital, a financial services firm operating 
+across fiduciary, credit, and technology domains.
+
+This mock backend will be consumed by an AI agent (Rogers Copilot) 
+via HTTP requests. The agent calls these endpoints to retrieve HR data 
+to respond to employee prompts. The backend must return realistic, 
+well-structured JSON responses.
+
+════════════════════════════════════════════════════════════
+TECH STACK
+════════════════════════════════════════════════════════════
+
+- Runtime:    Node.js
+- Framework:  Express.js
+- Database:   PostgreSQL
+- ORM/Query:  Knex.js (with migrations and seeds)
+- Language:   TypeScript
+- Auth:       API key via request header (X-API-Key)
+- Port:       4001
+
+All responses must be JSON.
+All dates in ISO 8601 format (YYYY-MM-DD).
+All currency amounts returned as numbers with a separate 
+currency field (e.g. { amount: 85000, currency: "MUR" }).
+
+════════════════════════════════════════════════════════════
+PROJECT STRUCTURE
+════════════════════════════════════════════════════════════
+
+aletia-backend/
+  src/
+    index.ts              — Express app entry point
+    db.ts                 — Knex connection instance
+    middleware/
+      auth.ts             — API key validation middleware
+      errorHandler.ts     — Global error handler
+    routes/
+      employees.ts        — Employee routes
+      leave.ts            — Leave routes
+      payroll.ts          — Payroll routes
+      performance.ts      — Performance review routes
+      history.ts          — Employment history routes
+      health.ts           — Health check route
+    types/
+      index.ts            — Shared TypeScript interfaces
+  db/
+    migrations/           — Knex migration files
+    seeds/                — Knex seed files
+  knexfile.ts
+  .env.example
+  package.json
+  tsconfig.json
+
+════════════════════════════════════════════════════════════
+AUTHENTICATION
+════════════════════════════════════════════════════════════
+
+All routes (except GET /health) require the following header:
+
+  X-API-Key: <api_key>
+
+The API key is stored in the .env file as ALETIA_API_KEY.
+If the header is missing or invalid, return:
+
+  HTTP 401
+  { "error": "unauthorized", "message": "Invalid or missing API key" }
+
+════════════════════════════════════════════════════════════
+DATABASE SCHEMA
+════════════════════════════════════════════════════════════
+
+Create the following tables via Knex migrations.
+All primary keys are SERIAL. All timestamps are TIMESTAMPTZ.
+
+──────────────────────────────────────
+TABLE: entities
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  name                VARCHAR(150) NOT NULL
+  registration_number VARCHAR(50) UNIQUE NOT NULL
+  entity_type         VARCHAR(50) NOT NULL  
+                      -- 'holding' | 'subsidiary' | 'fund'
+  is_active           BOOLEAN DEFAULT TRUE
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+
+──────────────────────────────────────
+TABLE: companies
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  entity_id           INT NOT NULL REFERENCES entities(id)
+  name                VARCHAR(150) NOT NULL
+  company_code        VARCHAR(20) UNIQUE NOT NULL
+  industry            VARCHAR(100)
+  is_active           BOOLEAN DEFAULT TRUE
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+
+──────────────────────────────────────
+TABLE: departments
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  company_id          INT NOT NULL REFERENCES companies(id)
+  name                VARCHAR(100) NOT NULL
+  code                VARCHAR(20) NOT NULL
+  is_active           BOOLEAN DEFAULT TRUE
+  UNIQUE (company_id, code)
+
+──────────────────────────────────────
+TABLE: job_grades
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  code                VARCHAR(10) UNIQUE NOT NULL
+  title               VARCHAR(50) NOT NULL
+  level               INT NOT NULL
+  min_salary          NUMERIC(12,2)
+  max_salary          NUMERIC(12,2)
+
+──────────────────────────────────────
+TABLE: job_titles
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  title               VARCHAR(100) UNIQUE NOT NULL
+  job_grade_id        INT NOT NULL REFERENCES job_grades(id)
+  department_code     VARCHAR(20)
+
+──────────────────────────────────────
+TABLE: employees
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  entity_id           INT NOT NULL REFERENCES entities(id)
+  company_id          INT NOT NULL REFERENCES companies(id)
+  department_id       INT NOT NULL REFERENCES departments(id)
+  job_title_id        INT NOT NULL REFERENCES job_titles(id)
+  employee_number     VARCHAR(20) UNIQUE NOT NULL
+  first_name          VARCHAR(80) NOT NULL
+  last_name           VARCHAR(80) NOT NULL
+  email               VARCHAR(150) UNIQUE NOT NULL
+  phone               VARCHAR(20)
+  date_of_birth       DATE
+  date_joined         DATE NOT NULL
+  date_left           DATE
+  employment_type     VARCHAR(30) NOT NULL  
+                      -- 'permanent' | 'contract' | 'intern'
+  manager_id          INT REFERENCES employees(id)
+  is_active           BOOLEAN DEFAULT TRUE
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+  updated_at          TIMESTAMPTZ DEFAULT NOW()
+
+──────────────────────────────────────
+TABLE: employment_history
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  employee_id         INT NOT NULL REFERENCES employees(id)
+  company_id          INT NOT NULL REFERENCES companies(id)
+  department_id       INT NOT NULL REFERENCES departments(id)
+  job_title_id        INT NOT NULL REFERENCES job_titles(id)
+  effective_from      DATE NOT NULL
+  effective_to        DATE
+  change_reason       VARCHAR(100)  
+                      -- 'promotion' | 'transfer' | 'restructure' | 'initial'
+
+──────────────────────────────────────
+TABLE: leave_types
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  name                VARCHAR(50) UNIQUE NOT NULL
+  max_days            INT
+
+──────────────────────────────────────
+TABLE: leave_records
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  employee_id         INT NOT NULL REFERENCES employees(id)
+  leave_type_id       INT NOT NULL REFERENCES leave_types(id)
+  start_date          DATE NOT NULL
+  end_date            DATE NOT NULL
+  days_taken          NUMERIC(4,1) NOT NULL
+  status              VARCHAR(20) DEFAULT 'pending'
+                      -- 'pending' | 'approved' | 'rejected'
+  approved_by         INT REFERENCES employees(id)
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+
+──────────────────────────────────────
+TABLE: payroll
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  employee_id         INT NOT NULL REFERENCES employees(id)
+  effective_from      DATE NOT NULL
+  effective_to        DATE
+  gross_salary        NUMERIC(12,2) NOT NULL
+  currency            CHAR(3) DEFAULT 'MUR'
+  pay_frequency       VARCHAR(20) DEFAULT 'monthly'
+  bank_name           VARCHAR(100)
+  bank_account        VARCHAR(30)
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+
+──────────────────────────────────────
+TABLE: performance_reviews
+──────────────────────────────────────
+  id                  SERIAL PRIMARY KEY
+  employee_id         INT NOT NULL REFERENCES employees(id)
+  reviewer_id         INT NOT NULL REFERENCES employees(id)
+  review_period       VARCHAR(20) NOT NULL
+  rating              NUMERIC(3,1)
+  comments            TEXT
+  submitted_at        TIMESTAMPTZ
+  status              VARCHAR(20) DEFAULT 'draft'
+                      -- 'draft' | 'submitted' | 'acknowledged'
+
+════════════════════════════════════════════════════════════
+SEED DATA
+════════════════════════════════════════════════════════════
+
+Seed the database with realistic data for Rogers Capital.
+Use Mauritian names, MUR currency, and Rogers Capital context.
+
+──────────────────────────────────────
+ENTITIES (2)
+──────────────────────────────────────
+1. Rogers Capital Ltd
+   registration_number: RC-001
+   entity_type: holding
+
+2. Rogers Capital Fiduciary Services Ltd
+   registration_number: RC-002
+   entity_type: subsidiary
+
+──────────────────────────────────────
+COMPANIES (3)
+──────────────────────────────────────
+1. Rogers Capital Ltd (entity: RC-001)
+   company_code: RCL
+   industry: financial_services
+
+2. Rogers Capital Fiduciary Services Ltd (entity: RC-002)
+   company_code: RCFS
+   industry: fiduciary
+
+3. Rogers Capital Technology Ltd (entity: RC-001)
+   company_code: RCTEC
+   industry: technology
+
+──────────────────────────────────────
+DEPARTMENTS (6)
+──────────────────────────────────────
+Per company as applicable:
+
+  Finance         code: FIN
+  Credit          code: CRD
+  Human Resources code: HRM
+  Technology      code: TEC
+  Operations      code: OPS
+  Fiduciary       code: FID
+
+──────────────────────────────────────
+JOB GRADES (6)
+──────────────────────────────────────
+  G1  Associate          level: 1   min: 25000   max: 40000   MUR
+  G2  Analyst            level: 2   min: 40000   max: 65000   MUR
+  G3  Senior Analyst     level: 3   min: 65000   max: 95000   MUR
+  G4  Team Lead          level: 4   min: 95000   max: 130000  MUR
+  G5  Manager            level: 5   min: 130000  max: 180000  MUR
+  G6  Senior Manager     level: 6   min: 180000  max: 250000  MUR
+
+──────────────────────────────────────
+JOB TITLES (12)
+──────────────────────────────────────
+  HR Officer              G2   HRM
+  HR Manager              G5   HRM
+  HR Admin                G6   HRM
+  Finance Analyst         G2   FIN
+  Finance Manager         G5   FIN
+  Credit Analyst          G2   CRD
+  Credit Manager          G5   CRD
+  Software Developer      G2   TEC
+  Tech Lead               G4   TEC
+  Operations Officer      G2   OPS
+  Fiduciary Officer       G2   FID
+  Fiduciary Manager       G5   FID
+
+──────────────────────────────────────
+EMPLOYEES (15)
+──────────────────────────────────────
+Create 15 employees with realistic Mauritian names spread 
+across departments, companies, and grades. Include:
+
+- At least 1 HR Admin (G6, HRM)
+- At least 1 HR Manager (G5, HRM)
+- At least 2 HR Officers (G2, HRM)
+- At least 1 Finance Manager (G5, FIN)
+- At least 2 Finance Analysts (G2, FIN)
+- At least 1 Credit Manager (G5, CRD)
+- At least 2 Credit Analysts (G2, CRD)
+- At least 1 Tech Lead (G4, TEC)
+- At least 2 Software Developers (G2, TEC)
+- At least 1 Fiduciary Manager (G5, FID)
+- At least 1 Fiduciary Officer (G2, FID)
+
+Assign managers appropriately 
+(analysts report to managers, managers report to senior managers).
+
+Use realistic Mauritian names such as:
+Priya Ramdhani, Jean-Michel Lagesse, Nathalie Bégué, 
+Vikash Foolchand, Marie-Claire Delannoy, Ashvin Mungroo,
+Sophie Perrier, Rishi Goburdhun, Laetitia Ah-Kine,
+Kevin Seeburn, Anisha Rughooputh, Dominique Fontaine,
+Thierry Meunier, Farida Oozeer, Cyril Leclézio
+
+Employee numbers: EMP-001 through EMP-015
+Emails: firstname.lastname@rogerscapital.mu
+Date joined: spread across 2018–2023
+Employment type: mix of permanent and contract
+
+──────────────────────────────────────
+EMPLOYMENT HISTORY
+──────────────────────────────────────
+For each employee, create at least 1 history record 
+(initial placement). For 4–5 employees, add a second 
+record showing a promotion or transfer with a realistic 
+effective_from date.
+
+──────────────────────────────────────
+LEAVE TYPES (5)
+──────────────────────────────────────
+  annual      max_days: 22
+  sick        max_days: 15
+  maternity   max_days: 84
+  paternity   max_days: 5
+  unpaid      max_days: null
+
+──────────────────────────────────────
+LEAVE RECORDS
+──────────────────────────────────────
+Create 20–25 leave records spread across employees.
+Mix of approved, pending, and rejected.
+Include annual and sick leave primarily.
+Dates within 2024–2025.
+approved_by should reference a manager employee id.
+
+──────────────────────────────────────
+PAYROLL
+──────────────────────────────────────
+Create one current payroll record per employee.
+Salaries must fall within the min/max range 
+for the employee's job grade.
+All in MUR, monthly frequency.
+effective_from: date_joined or last promotion date.
+effective_to: null (current).
+bank_name and bank_account: populate with dummy values 
+(these will never be returned by the API — 
+they exist only in the DB to simulate real data sensitivity).
+
+──────────────────────────────────────
+PERFORMANCE REVIEWS
+──────────────────────────────────────
+Create 15–20 performance review records.
+Review periods: FY2023, FY2024, H1-2025.
+Mix of draft, submitted, and acknowledged statuses.
+Ratings between 2.5 and 5.0.
+Reviewer should be the employee's manager.
+submitted_at: populate for submitted and acknowledged records.
+
+════════════════════════════════════════════════════════════
+API ENDPOINTS
+════════════════════════════════════════════════════════════
+
+All endpoints are prefixed with /api/v1
+All endpoints require X-API-Key header.
+All list endpoints support pagination via:
+  ?page=1&limit=50 (default limit: 50, max: 200)
+
+Return format for all list responses:
+{
+  "data": [...],
+  "meta": {
+    "total": 100,
+    "page": 1,
+    "limit": 50,
+    "pages": 2
+  }
+}
+
+Return format for single record responses:
+{
+  "data": { ... }
+}
+
+Return format for errors:
+{
+  "error": "error_code",
+  "message": "human readable message"
+}
+
+──────────────────────────────────────
+EMPLOYEE ENDPOINTS
+──────────────────────────────────────
+
+GET /api/v1/employees
+  Returns list of employees.
+  Query params (all optional):
+    department_id       integer
+    company_id          integer
+    entity_id           integer
+    manager_id          integer
+    employment_type     string  permanent | contract | intern
+    status              string  active | inactive
+    date_joined_from    date    YYYY-MM-DD
+    date_joined_to      date    YYYY-MM-DD
+    page                integer default 1
+    limit               integer default 50 max 200
+
+  Returns per employee:
+    id, employee_number, first_name, last_name, 
+    full_name (computed), email, phone, job_title, 
+    job_grade, department, company, entity,
+    employment_type, status (active/inactive), 
+    date_joined, manager_name, manager_id
+  
+  Does NOT return: date_of_birth
+
+GET /api/v1/employees/:employee_number
+  Returns single employee by employee_number (e.g. EMP-001).
+  Same fields as list endpoint.
+  Returns 404 if not found.
+
+GET /api/v1/employees/:employee_number/summary
+  Returns lightweight profile summary.
+  Fields: employee_number, full_name, job_title, 
+          department, company, email, status
+
+──────────────────────────────────────
+LEAVE ENDPOINTS
+──────────────────────────────────────
+
+GET /api/v1/leave
+  Returns leave records.
+  Query params (all optional):
+    employee_id         integer
+    employee_number     string
+    department_id       integer
+    leave_type          string
+    status              string  pending | approved | rejected
+    date_from           date    YYYY-MM-DD
+    date_to             date    YYYY-MM-DD
+    page                integer
+    limit               integer
+
+  Returns per record:
+    id, employee_number, full_name, leave_type,
+    start_date, end_date, days_taken, status, 
+    approved_by_name, created_at
+
+GET /api/v1/leave/balance/:employee_number
+  Returns leave balance summary for a specific employee.
+  Response:
+  {
+    "data": {
+      "employee_number": "EMP-001",
+      "full_name": "Priya Ramdhani",
+      "balances": {
+        "annual":    { "entitled": 22, "taken": 8, "remaining": 14 },
+        "sick":      { "entitled": 15, "taken": 3, "remaining": 12 },
+        "maternity": { "entitled": 84, "taken": 0, "remaining": 84 },
+        "paternity": { "entitled": 5,  "taken": 0, "remaining": 5  },
+        "unpaid":    { "entitled": null,"taken": 0, "remaining": null }
+      }
+    }
+  }
+
+──────────────────────────────────────
+PAYROLL ENDPOINTS
+──────────────────────────────────────
+
+GET /api/v1/payroll/:employee_number
+  Returns current payroll record for employee.
+  Response fields:
+    employee_number, full_name, gross_salary, 
+    currency, pay_frequency, effective_from,
+    job_grade, department
+    
+  NEVER return: bank_account, bank_name
+  Return 404 if not found.
+
+GET /api/v1/payroll
+  Returns payroll records for multiple employees.
+  Query params:
+    department_id       integer
+    company_id          integer
+    page                integer
+    limit               integer
+
+  Same field restrictions as above.
+  NEVER return bank_account or bank_name under any circumstances.
+
+──────────────────────────────────────
+PERFORMANCE ENDPOINTS
+──────────────────────────────────────
+
+GET /api/v1/performance
+  Returns performance review records.
+  Query params:
+    employee_id         integer
+    employee_number     string
+    reviewer_id         integer
+    review_period       string  e.g. FY2024
+    status              string  draft | submitted | acknowledged
+    department_id       integer
+    page                integer
+    limit               integer
+
+  Returns per record:
+    id, employee_number, full_name, review_period,
+    rating, status, reviewer_name, submitted_at, comments
+
+GET /api/v1/performance/:employee_number
+  Returns all performance reviews for a specific employee.
+  Same fields as list endpoint.
+
+──────────────────────────────────────
+EMPLOYMENT HISTORY ENDPOINTS
+──────────────────────────────────────
+
+GET /api/v1/history/:employee_number
+  Returns employment history for a specific employee.
+  Query params:
+    date_from           date
+    date_to             date
+    change_reason       string
+
+  Returns per record:
+    id, employee_number, full_name, job_title,
+    department, company, effective_from, 
+    effective_to, change_reason
+
+──────────────────────────────────────
+HEALTH ENDPOINT
+──────────────────────────────────────
+
+GET /health
+  No auth required.
+  Returns:
+  {
+    "status": "ok",
+    "service": "Aletia HR Platform",
+    "timestamp": "<ISO timestamp>"
+  }
+
+════════════════════════════════════════════════════════════
+ERROR HANDLING
+════════════════════════════════════════════════════════════
+
+Implement a global error handler middleware that catches 
+all unhandled errors and returns:
+
+  HTTP 500
+  { "error": "internal_server_error", "message": "..." }
+
+Handle the following explicitly:
+  400 — invalid query parameter format
+  401 — missing or invalid API key
+  404 — resource not found
+  422 — invalid filter combination
+
+════════════════════════════════════════════════════════════
+ENVIRONMENT VARIABLES (.env.example)
+════════════════════════════════════════════════════════════
+
+PORT=4001
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=aletia_hr
+DB_USER=postgres
+DB_PASSWORD=
+ALETIA_API_KEY=aletia-demo-key-2024
+
+════════════════════════════════════════════════════════════
+ADDITIONAL REQUIREMENTS
+════════════════════════════════════════════════════════════
+
+1. All Knex migrations must be reversible (implement down()).
+
+2. All seeds must be idempotent — running them twice 
+   should not create duplicate records. Use 
+   onConflict().ignore() or check before insert.
+
+3. Add a README.md with:
+   - Setup instructions
+   - How to run migrations and seeds
+   - List of all endpoints with example curl requests
+   - Example API responses for each endpoint
+
+4. Add request logging middleware that logs:
+   method, path, status code, and response time
+   for every request.
+
+5. Computed fields:
+   full_name must be computed as first_name + ' ' + last_name
+   status must be computed as:
+     active   if is_active = true AND date_left IS NULL
+     inactive if is_active = false OR date_left IS NOT NULL
+
+6. All list endpoints must return results ordered by 
+   created_at DESC unless otherwise specified.
+
+7. The payroll endpoint must strip bank_account and 
+   bank_name at the query level — never select these 
+   columns, not just exclude from response serialisation.
+   Use explicit column selection in all payroll queries.

@@ -27,6 +27,20 @@ export async function listMessagesBySession(sessionId: string, limit = 200): Pro
     .limit(limit);
 }
 
+export async function listMessagesByOwnedSession(
+  sessionId: string,
+  employeeNumber: string,
+  limit = 200,
+): Promise<MessageRow[]> {
+  return db<MessageRow>("chat_messages")
+    .innerJoin("chat_sessions", "chat_messages.session_id", "chat_sessions.id")
+    .where("chat_messages.session_id", sessionId)
+    .andWhere("chat_sessions.employee_number", employeeNumber)
+    .select("chat_messages.*")
+    .orderBy("chat_messages.created_at", "asc")
+    .limit(limit);
+}
+
 export async function createMessage(input: CreateMessageInput): Promise<MessageRow> {
   const [row] = await db<MessageRow>("chat_messages")
     .insert({
@@ -39,4 +53,3 @@ export async function createMessage(input: CreateMessageInput): Promise<MessageR
     .returning("*");
   return row;
 }
-

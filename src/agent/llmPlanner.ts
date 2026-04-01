@@ -1,11 +1,18 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { env } from "../config.js";
 import { logEvent } from "../chat/logger.js";
-import { getChatModel } from "./llmClient.js";
+import { extractMessageText, getChatModel } from "./llmClient.js";
 import { AGENT_SYSTEM_PROMPT } from "./systemPrompt.js";
-import { VALID_SKILL_NAMES, skillSummaryLines, type SkillName } from "./skillRegistry.js";
+import type { ModeOptions } from "./systemPrompt.js";
+import { artifactTypeSchema, type ArtifactType } from "../artifacts/types.js";
+import { skillSummaryLines } from "./skillRegistry.js";
 import { toolDescriptions, type ToolName } from "./toolRegistry.js";
-import type { AgentAction, AgentPlan, AgentStepResult, AgentUiAction, PlannedStep } from "./types.js";
+import type {
+  AgentAction,
+  AgentToolInput,
+  AgentStepResult,
+  AgentUiAction,
+} from "./types.js";
 
 function parseActionText(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim();
@@ -29,7 +36,188 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeToolCallInput(tool: ToolName, toolInput: unknown): AgentToolInput {
+  if (tool === "search_api") {
+    return asString(toolInput);
+  }
+
+  if (!isPlainObject(toolInput)) {
+    return {};
+  }
+
+  return {
+    domain: asString(toolInput.domain),
+    intent: asString(toolInput.intent),
+    params: isPlainObject(toolInput.params) ? toolInput.params : {},
+    filters: isPlainObject(toolInput.filters) ? toolInput.filters : {},
+  };
+}
+
+function validateToolCallInput(tool: ToolName, toolInput: unknown): boolean {
+  const normalizedToolInput = normalizeToolCallInput(tool, toolInput);
+  if (tool === "search_api") {
+    return typeof normalizedToolInput === "string" && Boolean(normalizedToolInput.trim());
+  }
+
+  if (tool === "execute_query" && isPlainObject(normalizedToolInput)) {
+    return Boolean(asString(normalizedToolInput.domain) && asString(normalizedToolInput.intent));
+  }
+
+  return false;
+}
+
 const VALID_UI_TYPES = new Set(["table", "chart", "card", "button"]);
+const MAX_SUMMARY_ROWS = 50;
+
+function isPrimitiveSummaryValue(value: unknown): value is string | number | boolean | null {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  );
+}
+
+function summarizeStepData(
+  step: AgentStepResult,
+  citationOffset: number,
+): { entry: Record<string, unknown>; nextCitationOffset: number } {
+  const entry: Record<string, unknown> = {
+    step: step.step,
+    tool: step.tool,
+    status: step.status,
+  };
+
+  if (step.error_message) {
+    entry.error = step.error_message;
+    return { entry, nextCitationOffset: citationOffset };
+  }
+
+  if (step.tool.startsWith("activated_skill:")) {
+    entry.skill =
+      typeof step.data?.skill === "string"
+        ? step.data.skill
+        : step.tool.replace("activated_skill:", "");
+    entry.loaded = true;
+    return { entry, nextCitationOffset: citationOffset };
+  }
+
+  const toolEnvelope =
+    isPlainObject(step.data) &&
+    typeof step.data.ok === "boolean" &&
+    typeof step.data.kind === "string" &&
+    "payload" in step.data
+      ? step.data
+      : null;
+
+  if (toolEnvelope) {
+    entry.ok = toolEnvelope.ok;
+    entry.result_kind = toolEnvelope.kind;
+    if (typeof toolEnvelope.summary === "string" && toolEnvelope.summary.trim()) {
+      entry.summary = toolEnvelope.summary.trim();
+    }
+  }
+
+  const payload = toolEnvelope && isPlainObject(toolEnvelope.payload) ? toolEnvelope.payload : step.data;
+
+  if (step.tool === "search_api" && Array.isArray((payload as Record<string, unknown> | undefined)?.hits)) {
+    const hits = (payload as { hits: Array<{
+      title?: string;
+      snippet?: string;
+      url?: string;
+      source?: string;
+    }> }).hits;
+    entry.citations = hits.map((h, i) => ({
+      index: citationOffset + i,
+      marker: `[cite:${citationOffset + i}]`,
+      title: h.title ?? "Untitled",
+      source: h.source ?? "unknown",
+      url: h.url ?? null,
+      snippet: (h.snippet ?? "").slice(0, 180),
+    }));
+    return { entry, nextCitationOffset: citationOffset + hits.length };
+  }
+
+  if (Array.isArray((payload as Record<string, unknown> | undefined)?.rows)) {
+    const rows = (payload as { rows: Array<Record<string, unknown>> }).rows;
+    entry.row_count = rows.length;
+    entry.rows = rows.slice(0, MAX_SUMMARY_ROWS);
+
+    for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+      if (key === "rows") continue;
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        value === null ||
+        (Array.isArray(value) && value.every((item) => typeof item === "string"))
+      ) {
+        entry[key] = value;
+      }
+    }
+
+    if (step.citation) entry.citation = step.citation.source;
+    return { entry, nextCitationOffset: citationOffset };
+  }
+
+  if (isPlainObject(payload)) {
+    let preservedStructuredField = false;
+
+    for (const [key, value] of Object.entries(payload)) {
+      if (isPrimitiveSummaryValue(value)) {
+        entry[key] = value;
+        continue;
+      }
+
+      if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+        entry[key] = value;
+        continue;
+      }
+
+      if (Array.isArray(value) && value.every((item) => isPlainObject(item))) {
+        entry[`${key}_count`] = value.length;
+        entry[key] = value.slice(0, MAX_SUMMARY_ROWS);
+        preservedStructuredField = true;
+        continue;
+      }
+
+      if (isPlainObject(value)) {
+        entry[key] = value;
+        preservedStructuredField = true;
+      }
+    }
+
+    if (preservedStructuredField || Object.keys(entry).length > 3) {
+      if (step.citation) entry.citation = step.citation.source;
+      return { entry, nextCitationOffset: citationOffset };
+    }
+  }
+
+  const raw = JSON.stringify(payload);
+  entry.result_excerpt = raw.length > 400 ? `${raw.slice(0, 400)}...` : raw;
+  if (step.citation) entry.citation = step.citation.source;
+  return { entry, nextCitationOffset: citationOffset };
+}
+
+function formatStepObservations(steps: AgentStepResult[]): string {
+  if (steps.length === 0) {
+    return "No prior observations.";
+  }
+
+  let citationOffset = 0;
+  const observations = steps.map((step, index) => {
+    const summary = summarizeStepData(step, citationOffset);
+    citationOffset = summary.nextCitationOffset;
+    const label = index === steps.length - 1 ? "CURRENT OBSERVATION" : `OBSERVATION ${index + 1}`;
+    return `${label}\n${JSON.stringify(summary.entry, null, 2)}`;
+  });
+
+  return observations.join("\n\n");
+}
 
 function toUiActions(value: unknown): AgentUiAction[] | undefined {
   if (!Array.isArray(value)) {
@@ -76,8 +264,7 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
 
   const actionRow = action as Record<string, unknown>;
   const actionType = asString(actionRow.type);
-  // Treat "ui_actions" as an alias for "respond" — the LLM sometimes uses it
-  // when it intends a final response with visual components.
+
   if (actionType === "respond" || actionType === "ui_actions") {
     const messageText = asString(actionRow.message_text);
     if (!messageText) {
@@ -88,40 +275,55 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
       intent,
       message_text: messageText,
       ui_actions: toUiActions(actionRow.ui_actions),
-      summary: typeof actionRow.summary === "string" && actionRow.summary.trim()
-        ? actionRow.summary.trim()
-        : undefined,
-      follow_up: typeof actionRow.follow_up === "string" && actionRow.follow_up.trim()
-        ? actionRow.follow_up.trim()
-        : undefined,
+      summary:
+        typeof actionRow.summary === "string" && actionRow.summary.trim()
+          ? actionRow.summary.trim()
+          : undefined,
+      follow_up:
+        typeof actionRow.follow_up === "string" && actionRow.follow_up.trim()
+          ? actionRow.follow_up.trim()
+          : undefined,
       show_sources: typeof actionRow.show_sources === "boolean" ? actionRow.show_sources : undefined,
     };
   }
 
   if (actionType === "artefact") {
-    const documentType = asString(actionRow.document_type);
+    const artifactType = asString(actionRow.artifact_type || actionRow.document_type);
     const title = asString(actionRow.title);
     const summary = asString(actionRow.summary);
-    const html = asString(actionRow.html);
-    if (!documentType || !title || !summary || !html) {
+    let content: unknown = actionRow.content;
+
+    if ((artifactType === "pdf" || artifactType === "txt") && typeof content === "string") {
+      content = artifactType === "pdf" ? { html: content } : { text: content };
+    }
+    if (!content && typeof actionRow.html === "string") {
+      content = { html: actionRow.html };
+    }
+
+    if (!artifactType || !title || !summary || content === undefined) {
+      return null;
+    }
+
+    const parsedArtifactType = artifactTypeSchema.safeParse(artifactType);
+    if (!parsedArtifactType.success) {
       return null;
     }
 
     return {
       type: "artefact",
       intent,
-      document_type: documentType,
+      artifact_type: parsedArtifactType.data as ArtifactType,
       title,
       summary,
-      html,
+      content,
     };
   }
 
   if (actionType === "call_tool") {
     const tool = asString(actionRow.tool);
-    const toolInput = asString(actionRow.tool_input);
+    const toolInput = actionRow.tool_input;
     const allowedSet = new Set(availableTools);
-    if (!toolInput || !allowedSet.has(tool as ToolName)) {
+    if (!allowedSet.has(tool as ToolName) || !validateToolCallInput(tool as ToolName, toolInput)) {
       return null;
     }
 
@@ -129,159 +331,13 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
       type: "call_tool",
       intent,
       tool: tool as ToolName,
-      tool_input: toolInput,
+      tool_input: normalizeToolCallInput(tool as ToolName, toolInput),
       rationale: asString(actionRow.rationale) || undefined,
-    };
-  }
-
-  if (actionType === "call_skill") {
-    const skill = asString(actionRow.skill);
-    if (!VALID_SKILL_NAMES.has(skill)) {
-      return null;
-    }
-    return {
-      type: "call_skill",
-      intent,
-      skill: skill as SkillName,
     };
   }
 
   return null;
 }
-
-// ─── Plan builder ────────────────────────────────────────────────────────────
-
-function parsePlan(raw: string, availableTools: ToolName[]): AgentPlan | null {
-  const parsed = parseActionText(raw);
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const intent = typeof parsed.intent === "string" ? parsed.intent.trim() : "";
-  if (!intent) return null;
-  if (!Array.isArray(parsed.steps)) return null;
-
-  const allowedToolSet = new Set(availableTools);
-  const steps: PlannedStep[] = [];
-
-  for (const item of parsed.steps) {
-    if (!item || typeof item !== "object") continue;
-    const s = item as Record<string, unknown>;
-    const stepNum = typeof s.step === "number" ? s.step : steps.length + 1;
-    const type = typeof s.type === "string" ? s.type.trim() : "";
-
-    if (type === "call_skill") {
-      const skill = typeof s.skill === "string" ? s.skill.trim() : "";
-      if (!VALID_SKILL_NAMES.has(skill)) continue;
-      steps.push({ step: stepNum, type: "call_skill", skill: skill as SkillName });
-    } else if (type === "call_tool") {
-      const tool = typeof s.tool === "string" ? s.tool.trim() : "";
-      const toolInput = typeof s.tool_input === "string" ? s.tool_input.trim() : "";
-      if (!toolInput || !allowedToolSet.has(tool as ToolName)) continue;
-      steps.push({ step: stepNum, type: "call_tool", tool: tool as ToolName, tool_input: toolInput });
-    } else if (type === "respond") {
-      steps.push({ step: stepNum, type: "respond" });
-    } else if (type === "artefact") {
-      steps.push({ step: stepNum, type: "artefact" });
-    }
-  }
-
-  if (steps.length === 0) return null;
-
-  // Ensure the plan ends with a terminal step.
-  const last = steps[steps.length - 1];
-  if (last.type !== "respond" && last.type !== "artefact") {
-    steps.push({ step: steps.length + 1, type: "respond" });
-  }
-
-  return { intent, steps };
-}
-
-export async function buildAgentPlan(
-  prompt: string,
-  correlationId: string,
-  history: Array<{ role: "user" | "assistant"; text: string }>,
-  availableTools: ToolName[],
-  systemPrompt: string = AGENT_SYSTEM_PROMPT,
-): Promise<AgentPlan | null> {
-  const model = getChatModel();
-  if (!model) return null;
-
-  const filteredDescriptions = Object.fromEntries(
-    Object.entries(toolDescriptions).filter(([name]) => availableTools.includes(name as ToolName)),
-  );
-  const toolsList = Object.entries(filteredDescriptions)
-    .map(([name, description]) => `- ${name}: ${description}`)
-    .join("\n");
-
-  const planningSystemPrompt = [
-    "You are a planning agent. Analyse the user request and return a single JSON object describing the minimal execution plan.",
-    "Return ONLY valid JSON — no prose, no markdown fences.",
-    'Schema: {"intent":"<one sentence summary>","steps":[...]}',
-    "Step shapes:",
-    '  call_skill : {"step":N,"type":"call_skill","skill":"<skill_name>"}',
-    '  call_tool  : {"step":N,"type":"call_tool","tool":"<tool_name>","tool_input":"<concrete query>"}',
-    '  respond    : {"step":N,"type":"respond"}',
-    '  artefact   : {"step":N,"type":"artefact"}',
-    "Planning rules:",
-    "- Greetings, thank-you, conversational replies, questions you can answer from knowledge → steps=[{step:1,type:respond}]",
-    "- Research tasks → load the relevant skill first, then one call_tool per distinct search angle (max 4), then respond.",
-    "- Presentations / reports / structured documents → load artefact_design skill, optional searches, then artefact.",
-    "- Do NOT add redundant skill loads. Each skill should appear at most once.",
-    "- Every plan must end with a respond or artefact step.",
-    "- tool_input must be a specific, concrete search query — never a placeholder or template.",
-    `Available skills:\n${skillSummaryLines || "(none)"}`,
-    `Available tools:\n${toolsList || "(none)"}`,
-  ].join("\n");
-
-  const recentHistory =
-    history.length > 0
-      ? `Recent conversation:\n${history
-          .slice(-4)
-          .map((t) => `${t.role}: ${t.text}`)
-          .join("\n")}`
-      : "";
-
-  const planningUserPrompt = [recentHistory, `User request: ${prompt}`]
-    .filter(Boolean)
-    .join("\n");
-
-  try {
-    const message = await model.invoke([
-      new SystemMessage(planningSystemPrompt),
-      new HumanMessage(planningUserPrompt),
-    ]);
-
-    const rawText =
-      typeof message.content === "string"
-        ? message.content
-        : Array.isArray(message.content)
-          ? message.content
-              .map((item) =>
-                typeof item === "string" ? item : "text" in item ? String(item.text) : "",
-              )
-              .join("")
-          : "";
-
-    const plan = parsePlan(rawText, availableTools);
-    if (plan) {
-      logEvent("info", "agent.plan.built", correlationId, {
-        model: env.LLM_MODEL,
-        intent: plan.intent,
-        steps: plan.steps.map((s) => ({ step: s.step, type: s.type })),
-      });
-    } else {
-      logEvent("warn", "agent.plan.parse_failed", correlationId, { model: env.LLM_MODEL });
-    }
-    return plan;
-  } catch (error) {
-    logEvent("warn", "agent.plan.error", correlationId, {
-      model: env.LLM_MODEL,
-      error_message: error instanceof Error ? error.message : "unknown_error",
-    });
-    return null;
-  }
-}
-
-// ─── Step decider (reactive fallback) ─────────────────────────────────────────
 
 export async function decideNextAgentAction(
   prompt: string,
@@ -290,9 +346,10 @@ export async function decideNextAgentAction(
   steps: AgentStepResult[] = [],
   systemPrompt: string = AGENT_SYSTEM_PROMPT,
   availableTools: ToolName[] = Object.keys(toolDescriptions) as ToolName[],
+  modes: ModeOptions = { research: false, thinking: true },
   forceRespond = false,
 ): Promise<AgentAction | null> {
-  const model = getChatModel();
+  const model = getChatModel({ thinking: modes.thinking });
   if (!model) {
     return null;
   }
@@ -307,68 +364,23 @@ export async function decideNextAgentAction(
     .map(([name, description]) => `- ${name}: ${description}`)
     .join("\n");
 
-  // Slim step summary — never forward full tool data payloads.
-  // For search_api steps, hits are shown as numbered citation references so the
-  // model can place accurate [cite:N] markers. Running index tracks global offset.
-  let citationOffset = 0;
-  const stepSummary =
-    steps.length > 0
-      ? steps
-          .map((step) => {
-            const entry: Record<string, unknown> = {
-              step: step.step,
-              tool: step.tool,
-              status: step.status,
-            };
-            if (step.error_message) {
-              entry.error = step.error_message;
-            } else if (step.tool.startsWith("call_skill:")) {
-              // Forward the full skill instructions so they shape the synthesis call.
-              entry.skill_instructions =
-                typeof step.data?.instructions === "string"
-                  ? step.data.instructions
-                  : "skill loaded";
-            } else if (step.tool === "search_api" && Array.isArray(step.data?.hits)) {
-              // Format hits as indexed citation references so the model can embed
-              // accurate [cite:N] markers. Global offset carries across steps.
-              const hits = step.data.hits as Array<{
-                title?: string;
-                snippet?: string;
-                url?: string;
-                source?: string;
-              }>;
-              entry.citations = hits.map((h, i) => ({
-                index: citationOffset + i,
-                marker: `[cite:${citationOffset + i}]`,
-                title: h.title ?? "Untitled",
-                source: h.source ?? "unknown",
-                url: h.url ?? null,
-                snippet: (h.snippet ?? "").slice(0, 180),
-              }));
-              citationOffset += hits.length;
-            } else {
-              const raw = JSON.stringify(step.data);
-              entry.result_excerpt = raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
-              if (step.citation) entry.citation = step.citation.source;
-            }
-            return JSON.stringify(entry);
-          })
-          .join("\n")
-      : "none";
+  const stepSummary = formatStepObservations(steps);
 
-  // Planning prompt is purely contextual — all rules live in the system prompt.
   const planningPrompt = [
     "You are executing one step in an iterative agent loop.",
     "Your system prompt contains all rules, action schemas, skill guidelines, and formatting constraints — follow them exactly.",
     "Return a single JSON action and nothing else.",
     forceRespond
-      ? "IMPORTANT: You must produce a final output now. Use action.type='respond' for plain answers, or action.type='artefact' for document deliverables. Do not call any further tools or skills."
+      ? "IMPORTANT: You must produce a final output now. Use action.type='respond' for plain answers, or action.type='artefact' for document deliverables. Do not call any further tools or skills. If specialist guidance is already loaded, apply it."
       : availableTools.length > 0
-        ? "Tools and skills are available. Use call_skill first for specialist tasks, then call_tool if needed, then respond."
+        ? "Use already-loaded specialist guidance when present. The platform usually preselects the needed capabilities before this loop begins. Use call_tool only when needed, then respond once the request is satisfied."
         : "No tools are available. Respond directly from knowledge.",
+    "PRIOR OBSERVATIONS are authoritative. Read them carefully before choosing the next action.",
+    "If the CURRENT OBSERVATION fully answers the user request, your next action must be respond.",
+    "Do not repeat a tool call when the current observation already contains the answer or when an equivalent result is already available from the same tool.",
     `Available skills:\n${skillSummaryLines || "(none)"}`,
     `Available tools:\n${toolsList || "(none)"}`,
-    `Steps executed so far (${steps.length}):\n${stepSummary}`,
+    `Prior observations (${steps.length}):\n${stepSummary}`,
     history.length > 0
       ? `Recent conversation:\n${history
           .slice(-6)
@@ -378,41 +390,14 @@ export async function decideNextAgentAction(
     `User request: ${prompt}`,
   ].join("\n");
 
-  // Collect skill instructions loaded during execution and inject them into the
-  // SystemMessage so they actively shape the synthesis call instead of sitting
-  // inert in a slim step-summary field.
-  const loadedSkillInstructions = steps
-    .filter((s) => s.tool.startsWith("call_skill:") && s.status === "success")
-    .map((s) => {
-      const name = s.tool.replace("call_skill:", "").replace(/_/g, " ");
-      const body = typeof s.data?.instructions === "string" ? s.data.instructions : "";
-      return body ? `## Loaded skill: ${name}\n${body}` : null;
-    })
-    .filter((s): s is string => Boolean(s));
-
-  const augmentedSystemPrompt =
-    loadedSkillInstructions.length > 0
-      ? `${systemPrompt}\n\n---\nACTIVE SKILL INSTRUCTIONS — apply these when producing your response:\n\n${loadedSkillInstructions.join("\n\n")}`
-      : systemPrompt;
-
   for (let iteration = 1; iteration <= env.AGENT_MAX_PLANNING_ITERATIONS; iteration += 1) {
     try {
       const message = await model.invoke([
-        new SystemMessage(augmentedSystemPrompt),
+        new SystemMessage(systemPrompt),
         new HumanMessage(planningPrompt),
       ]);
 
-      const rawText =
-        typeof message.content === "string"
-          ? message.content
-          : Array.isArray(message.content)
-            ? message.content
-                .map((item) =>
-                  typeof item === "string" ? item : "text" in item ? String(item.text) : "",
-                )
-                .join("")
-            : "";
-
+      const rawText = extractMessageText(message.content);
       const parsed = parseActionText(rawText);
       const action = toAction(parsed, availableTools);
 

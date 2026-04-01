@@ -8,6 +8,7 @@ const envSchema = z.object({
   PORT: z.string().default("4000"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   DATABASE_URL: z.string().url().default("postgresql://copilot:copilot@localhost:5432/copilot"),
+  JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   LLM_PROVIDER: z.enum(["openai_compat", "google"]).default("openai_compat"),
   LLM_MODEL: z.string().default("MiniMaxAI/MiniMax-M2.5-TEE"),
   LLM_API_KEY: z.string().optional(),
@@ -23,6 +24,8 @@ const envSchema = z.object({
   TAVILY_API_KEY: z.string().optional(),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
   SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
+  ALETIA_API_URL: z.string().default("http://localhost:4001"),
+  ALETIA_API_KEY: z.string().default(""),
 });
 
 export const env = envSchema.parse(process.env);

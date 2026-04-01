@@ -1,6 +1,8 @@
 import type { ChatResponse } from "../chat/contracts.js";
-import type { SkillName } from "./skillRegistry.js";
+import type { ArtifactType } from "../artifacts/types.js";
 import type { ToolName } from "./toolRegistry.js";
+
+export type AgentToolInput = string | Record<string, unknown>;
 
 export type AgentUiAction = {
   id: string;
@@ -20,9 +22,9 @@ export type AgentUiAction = {
 
 export type AgentStepResult = {
   step: number;
-  tool: string; // ToolName for real tools, "call_skill:<name>" for skill lookups
-  tool_input: string;
-  status: "success" | "error";
+  tool: string; // ToolName for real tools, "activated_skill:<name>" for injected capability markers
+  tool_input: AgentToolInput;
+  status: "success" | "blocked" | "error";
   data: Record<string, unknown>;
   citation?: { label: string; source: string; uri?: string };
   error_message?: string;
@@ -33,13 +35,8 @@ export type AgentAction =
       type: "call_tool";
       intent: string;
       tool: ToolName;
-      tool_input: string;
+      tool_input: AgentToolInput;
       rationale?: string;
-    }
-  | {
-      type: "call_skill";
-      intent: string;
-      skill: SkillName;
     }
   | {
       type: "respond";
@@ -53,24 +50,10 @@ export type AgentAction =
   | {
       type: "artefact";
       intent: string;
-      document_type: string;
+      artifact_type: ArtifactType;
       title: string;
       summary: string;
-      html: string;
+      content: unknown;
     };
 
 export type AgentRunResult = ChatResponse;
-
-// ─── Plan-and-Execute types ────────────────────────────────────────────────
-
-export type PlannedStep =
-  | { step: number; type: "call_skill"; skill: SkillName }
-  | { step: number; type: "call_tool"; tool: ToolName; tool_input: string }
-  | { step: number; type: "respond" }
-  | { step: number; type: "artefact" };
-
-export type AgentPlan = {
-  intent: string;
-  steps: PlannedStep[];
-};
-

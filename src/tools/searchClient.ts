@@ -1,4 +1,4 @@
-import type { ToolResult } from "./types.js";
+import type { ToolContext, ToolResult } from "./types.js";
 import { env } from "../config.js";
 import { RetryableToolError } from "../chat/runtimePolicy.js";
 
@@ -304,7 +304,7 @@ async function fetchWikipediaFallback(query: string): Promise<SearchData> {
   };
 }
 
-export async function searchClient(query: string): Promise<ToolResult<SearchData>> {
+export async function searchClient(query: string, _context?: ToolContext): Promise<ToolResult<SearchData>> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) {
     throw new SearchUnavailableError("search_api_empty_query");
@@ -327,9 +327,14 @@ export async function searchClient(query: string): Promise<ToolResult<SearchData
       tool: "search_api",
       version: "v3",
       data: {
-        query: trimmedQuery,
-        hits: mergedHits,
-        recency_applied: recency,
+        ok: true,
+        kind: "search",
+        payload: {
+          query: trimmedQuery,
+          hits: mergedHits,
+          recency_applied: recency,
+        },
+        summary: `Found ${mergedHits.length} external sources for "${trimmedQuery}".`,
       },
       citation: {
         label: "search:tavily",
@@ -350,9 +355,14 @@ export async function searchClient(query: string): Promise<ToolResult<SearchData
         tool: "search_api",
         version: "v3",
         data: {
-          query: trimmedQuery,
-          hits: mergedHits,
-          recency_applied: detectRecency(trimmedQuery).label,
+          ok: true,
+          kind: "search",
+          payload: {
+            query: trimmedQuery,
+            hits: mergedHits,
+            recency_applied: detectRecency(trimmedQuery).label,
+          },
+          summary: `Found ${mergedHits.length} external sources for "${trimmedQuery}".`,
         },
         citation: {
           label: "search:duckduckgo",
@@ -371,7 +381,12 @@ export async function searchClient(query: string): Promise<ToolResult<SearchData
       return {
         tool: "search_api",
         version: "v3",
-        data: fallback,
+        data: {
+          ok: true,
+          kind: "search",
+          payload: fallback,
+          summary: `Found ${fallback.hits.length} external sources for "${trimmedQuery}".`,
+        },
         citation: {
           label: "search:wikipedia",
           source: "search_api",

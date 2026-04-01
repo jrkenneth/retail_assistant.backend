@@ -1,14 +1,49 @@
 import { Router } from "express";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ZodError } from "zod";
 import { runAgent } from "../agent/agentRunner.js";
+import type { ModeOptions } from "../agent/systemPrompt.js";
+import type { AuthenticatedUser } from "../auth/types.js";
 import { chatRequestSchema, chatResponseSchema, type ChatResponse } from "../chat/contracts.js";
 import { logEvent, makeReferenceId } from "../chat/logger.js";
-import { createMessage, listMessagesBySession } from "../db/repositories/messagesRepo.js";
-import { createSession, getSessionById, touchSession } from "../db/repositories/sessionsRepo.js";
+import { createMessage, listMessagesByOwnedSession } from "../db/repositories/messagesRepo.js";
+import { createSession, getSessionById, renameSession, touchSession } from "../db/repositories/sessionsRepo.js";
 import { createTrace } from "../db/repositories/tracesRepo.js";
+import { extractMessageText, getChatModel } from "../agent/llmClient.js";
 
 const makeId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function generateSessionTitle(
+  userPrompt: string,
+  modes: ModeOptions = { research: false, thinking: true },
+): Promise<string | null> {
+  const fallbackTitle = userPrompt
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?]+$/g, "")
+    .slice(0, 80);
+  try {
+    const model = getChatModel({ thinking: modes.thinking });
+    if (!model) return fallbackTitle || null;
+    const result = await model.invoke([
+      new SystemMessage(
+        "Generate a concise chat session title (4–7 words) that captures the user's intent. " +
+        "Return only the title — no quotes, no punctuation at the end, no explanation.",
+      ),
+      new HumanMessage(userPrompt),
+    ]);
+    const text = extractMessageText(result.content);
+    const cleaned = text
+      .replace(/^["'\s]+|["'\s]+$/g, "")
+      .replace(/[.!?]+$/g, "")
+      .trim();
+    if (!cleaned || cleaned.length > 80) return fallbackTitle || null;
+    return cleaned;
+  } catch {
+    return fallbackTitle || null;
+  }
+}
 
 export const chatRouter = Router();
 
@@ -49,9 +84,16 @@ function mapInternalError(correlationId: string): ChatResponse {
 async function processChatRequest(
   rawBody: unknown,
   correlationId: string,
+  user: AuthenticatedUser,
   onStatus?: (phase: string, message: string) => void,
+  ipAddress?: string,
 ): Promise<ChatResponse> {
-  const request = chatRequestSchema.parse(rawBody);
+  const parsed = chatRequestSchema.parse(rawBody);
+  const request = parsed;
+  const activeModes: ModeOptions = {
+    research: request.context?.modes?.research ?? false,
+    thinking: request.context?.modes?.thinking ?? true,
+  };
 
   logEvent("info", "chat.request.received", correlationId, {
     client_request_id: request.client_request_id ?? null,
@@ -59,11 +101,11 @@ async function processChatRequest(
     prompt_length: request.prompt.length,
   });
 
-  const existingSession = await getSessionById(request.session_id);
+  const existingSession = await getSessionById(request.session_id, user.employee_number);
   if (!existingSession) {
-    await createSession(request.session_id, "New Chat");
+    await createSession(request.session_id, "New Chat", user.employee_number);
   }
-  const historyRows = await listMessagesBySession(request.session_id, 12);
+  const historyRows = await listMessagesByOwnedSession(request.session_id, user.employee_number, 12);
   let historyMapped = historyRows.map((row) => ({
     role: row.role,
     text: row.message_text,
@@ -90,7 +132,7 @@ async function processChatRequest(
 
   const history = historyMapped;
 
-  const responsePayload = await runAgent(request, correlationId, history, onStatus);
+  const responsePayload = await runAgent(request, correlationId, user, history, onStatus, ipAddress);
   const response = chatResponseSchema.parse(responsePayload);
 
   await Promise.all([
@@ -119,7 +161,7 @@ async function processChatRequest(
         attempts: trace.attempts,
       }),
     ),
-    touchSession(request.session_id),
+    touchSession(request.session_id, user.employee_number),
   ]);
 
   logEvent("info", "chat.request.completed", correlationId, {
@@ -128,13 +170,26 @@ async function processChatRequest(
     error_count: response.errors.length,
   });
 
+  // Auto-rename a fresh session once we have the first prompt.
+  const shouldAutoRename =
+    !request.is_retry &&
+    (historyRows.length === 0 || existingSession?.title === "New Chat");
+
+  if (shouldAutoRename) {
+    const title = await generateSessionTitle(request.prompt, activeModes);
+    if (title) {
+      await renameSession(request.session_id, title, user.employee_number);
+      return { ...response, session_title: title };
+    }
+  }
+
   return response;
 }
 
 chatRouter.post("/", async (req, res) => {
   const correlationId = req.header("x-correlation-id") ?? makeReferenceId();
   try {
-    const response = await processChatRequest(req.body, correlationId);
+    const response = await processChatRequest(req.body, correlationId, req.user!, undefined, req.ip);
     res.setHeader("x-reference-id", correlationId);
     res.status(200).json(response);
   } catch (error) {
@@ -168,7 +223,7 @@ chatRouter.post("/stream", async (req, res) => {
   };
 
   try {
-    const response = await processChatRequest(req.body, correlationId, onStatus);
+    const response = await processChatRequest(req.body, correlationId, req.user!, onStatus, req.ip);
     const words = response.message_text.split(" ");
     for (let i = 0; i < words.length; i++) {
       const token = i === words.length - 1 ? words[i] : `${words[i]} `;

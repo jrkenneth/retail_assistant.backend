@@ -14,6 +14,7 @@ export const chatRequestSchema = z.object({
       modes: z
         .object({
           research: z.boolean().optional(),
+          thinking: z.boolean().optional(),
         })
         .optional(),
     })
@@ -70,6 +71,8 @@ export const chatResponseSchema = z.object({
   summary: z.string().optional(),
   follow_up: z.string().optional(),
   show_sources: z.boolean().optional(),
+  // Set only on the first message of a session; instructs the client to rename the session.
+  session_title: z.string().min(1).max(80).optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;

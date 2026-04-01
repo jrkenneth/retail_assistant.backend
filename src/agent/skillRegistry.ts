@@ -1,12 +1,371 @@
-export type SkillName =
-  | "web_research"
-  | "artefact_design"
-  | "document_extraction";
+const QUERYDB_SKILL_INSTRUCTIONS = `
+SKILL: query_db
+DOMAIN COVERED: hr (Aletia HR Platform)
+
+You may query HR data using the execute_query tool
+with domain: "hr".
+You may also create access escalation tickets using
+domain: "rbac", intent: "create_access_request" when the
+user explicitly asks you to raise an access request after
+being denied access.
+
+Never fabricate, infer, or guess values - use only what
+the API returns.
+
+Never invent identifiers such as department_id,
+employee_number, employee_id, manager_id, reviewer_id,
+company_id, entity_id, or status codes.
+
+If a required parameter is missing for the specific intent you
+have chosen, first check whether another supported intent can
+resolve the request with the information the user already gave.
+For employee requests where the user provides a name but not an
+employee_number, first use query_employees with full_name,
+first_name, or last_name before asking the user for an employee
+number. Ask for employee_number only if the selected intent truly
+requires it and no supported name-based lookup can resolve the
+request.
+If a required identifier is still missing and cannot be resolved
+from a supported lookup or name-based filter, ask the user
+instead of guessing.
+
+When the user provides a department name such as "Finance",
+prefer department_name filters over guessing a numeric
+department_id.
+
+All dates must be passed in YYYY-MM-DD format.
+
+Currency amounts must be returned with their currency code.
+Example: "MUR 85,000" not "85000".
+
+When a query returns no results, say so clearly.
+Never suggest data exists when it does not.
+
+Apply a sensible limit to all list queries unless the user
+explicitly asks for all records. Default limit: 50.
+
+============================================================
+DOMAIN: hr
+Source: Aletia HR Platform (via internal adapter)
+============================================================
+
+----------------------------------------
+INTENT: query_employees
+----------------------------------------
+Description:
+  Retrieve employee records. Use for any request involving
+  listing, finding, or describing employees - by department,
+  role, status, manager, or individually.
+
+params (path-level, include when querying a specific employee):
+  employee_number     string    - e.g. "EMP-001"
+
+filters (query-level, all optional):
+  first_name          string    - partial match on first name
+  last_name           string    - partial match on last name
+  full_name           string    - partial match on full name
+  department_id       integer
+  department_name     string    - partial match on department name
+  company_id          integer
+  entity_id           integer
+  manager_id          integer
+  employment_type     string    - "permanent" | "contract" | "intern"
+  status              string    - "active" | "inactive"
+  date_joined_from    date      - YYYY-MM-DD
+  date_joined_to      date      - YYYY-MM-DD
+  limit               integer   - default 50, max 200
+  page                integer   - default 1
+
+Example calls:
+  "List all employees"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { status: "active", limit: 50 }
+
+  "Show me employee EMP-007"
+  -> intent: get_employee_profile
+  -> params: { employee_number: "EMP-007" }
+  -> filters: {}
+
+  "Show me employee Vikash Foolchand"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { full_name: "Vikash Foolchand", limit: 50 }
+
+  "Show me the profile of Vikash Foolchand"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { full_name: "Vikash Foolchand", limit: 50 }
+
+  "List all employees in the Finance department"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { department_name: "Finance", status: "active" }
+
+  "Who are the direct reports of EMP-002?"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { manager_id: <id> }
+
+  "Show me all employees named Priya"
+  -> intent: query_employees
+  -> params: {}
+  -> filters: { first_name: "Priya" }
+
+----------------------------------------
+INTENT: get_employee_profile
+----------------------------------------
+Description:
+  Retrieve full profile for a single employee by
+  employee_number. If the user gives only a name, resolve the
+  employee first with query_employees, then use the returned
+  employee_number if a full profile is still needed.
+
+params:
+  employee_number     string    REQUIRED - e.g. "EMP-001"
+
+filters: none
+
+Example call:
+  "Show me the profile of EMP-005"
+  -> intent: get_employee_profile
+  -> params: { employee_number: "EMP-005" }
+  -> filters: {}
+
+----------------------------------------
+INTENT: get_employee_summary
+----------------------------------------
+Description:
+  Retrieve a lightweight summary for a single employee.
+  Use when only basic info is needed
+  (name, title, department, email, status).
+
+params:
+  employee_number     string    REQUIRED
+
+filters: none
+
+----------------------------------------
+INTENT: query_leave
+----------------------------------------
+Description:
+  Retrieve leave records. Use for requests about leave
+  history, leave taken, pending approvals, or leave within
+  a date range.
+
+params: none
+
+filters (all optional):
+  employee_id         integer
+  employee_number     string
+  first_name          string    - partial match on first name
+  last_name           string    - partial match on last name
+  full_name           string    - partial match on full name
+  department_id       integer
+  department_name     string    - partial match on department name
+  leave_type          string    - "annual"|"sick"|"maternity"|
+                                  "paternity"|"unpaid"
+  status              string    - "pending"|"approved"|"rejected"
+  date_from           date      - YYYY-MM-DD
+  date_to             date      - YYYY-MM-DD
+  limit               integer
+  page                integer
+
+Example calls:
+  "Show me all pending leave requests"
+  -> intent: query_leave
+  -> params: {}
+  -> filters: { status: "pending" }
+
+  "How much sick leave did EMP-003 take in 2025?"
+  -> intent: query_leave
+  -> params: {}
+  -> filters: {
+      employee_number: "EMP-003",
+      leave_type: "sick",
+      date_from: "2025-01-01",
+      date_to: "2025-12-31"
+    }
+
+  "Find leave records for Nathalie Begue"
+  -> intent: query_leave
+  -> params: {}
+  -> filters: { full_name: "Nathalie Begue" }
+
+----------------------------------------
+INTENT: get_leave_balance
+----------------------------------------
+Description:
+  Retrieve leave balance summary for a specific employee.
+  Use when the user asks how many leave days remain,
+  their leave entitlement, or their leave balance.
+
+params:
+  employee_number     string    REQUIRED
+
+filters: none
+
+Example call:
+  "How many annual leave days does EMP-003 have left?"
+  -> intent: get_leave_balance
+  -> params: { employee_number: "EMP-003" }
+  -> filters: {}
+
+----------------------------------------
+INTENT: query_payroll
+----------------------------------------
+Description:
+  Retrieve payroll records for multiple employees.
+  Use for department-wide or company-wide salary queries.
+
+params: none
+
+filters (all optional):
+  first_name          string    - partial match on first name
+  last_name           string    - partial match on last name
+  full_name           string    - partial match on full name
+  department_id       integer
+  department_name     string    - partial match on department name
+  company_id          integer
+  limit               integer
+  page                integer
+
+Example call:
+  "Show me payroll for the Finance department"
+  -> intent: query_payroll
+  -> params: {}
+  -> filters: { department_name: "Finance" }
+
+----------------------------------------
+INTENT: get_employee_payroll
+----------------------------------------
+Description:
+  Retrieve the current payroll record for a single employee.
+
+params:
+  employee_number     string    REQUIRED
+
+filters: none
+
+Example call:
+  "What is EMP-011's salary?"
+  -> intent: get_employee_payroll
+  -> params: { employee_number: "EMP-011" }
+  -> filters: {}
+
+----------------------------------------
+INTENT: create_access_request
+----------------------------------------
+Description:
+  Create an RBAC access escalation ticket only when the
+  user explicitly confirms they want you to raise one
+  after access has been denied.
+
+domain:
+  "rbac"
+
+params:
+  requested_by        string    REQUIRED
+  resource_requested  string    REQUIRED
+  justification       string    REQUIRED
+
+----------------------------------------
+INTENT: query_performance
+----------------------------------------
+Description:
+  Retrieve performance review records. Use for requests
+  about ratings, review history, review status, or
+  reviews for a specific period.
+
+params: none
+
+filters (all optional):
+  employee_id         integer
+  employee_number     string
+  first_name          string    - partial match on first name
+  last_name           string    - partial match on last name
+  full_name           string    - partial match on full name
+  reviewer_id         integer
+  review_period       string    - e.g. "FY2024", "H1-2025"
+  status              string    - "draft"|"submitted"|"acknowledged"
+  department_id       integer
+  department_name     string    - partial match on department name
+  limit               integer
+  page                integer
+
+Example calls:
+  "Show me all FY2024 performance reviews"
+  -> intent: query_performance
+  -> params: {}
+  -> filters: { review_period: "FY2024" }
+
+  "Show me submitted reviews for EMP-007"
+  -> intent: query_performance
+  -> params: {}
+  -> filters: { employee_number: "EMP-007", status: "submitted" }
+
+----------------------------------------
+INTENT: get_employee_performance
+----------------------------------------
+Description:
+  Retrieve all performance reviews for a specific employee.
+
+params:
+  employee_number     string    REQUIRED
+
+filters (optional):
+  page                integer
+  limit               integer
+
+Example call:
+  "Show me EMP-013's performance history"
+  -> intent: get_employee_performance
+  -> params: { employee_number: "EMP-013" }
+  -> filters: {}
+
+----------------------------------------
+INTENT: get_employment_history
+----------------------------------------
+Description:
+  Retrieve employment history (role and department movements)
+  for a specific employee. Use for career progression,
+  past roles, transfers, or promotions.
+
+params:
+  employee_number     string    REQUIRED
+
+filters (all optional):
+  date_from           date      - YYYY-MM-DD
+  date_to             date      - YYYY-MM-DD
+  change_reason       string    - "promotion"|"transfer"|
+                                  "restructure"|"initial"
+  page                integer
+  limit               integer
+
+Example call:
+  "Show me the career history of EMP-011"
+  -> intent: get_employment_history
+  -> params: { employee_number: "EMP-011" }
+  -> filters: {}
+
+----------------------------------------
+INTENT: health_check
+----------------------------------------
+Description:
+  Check if the Aletia HR service is available.
+  Use when the user asks if the HR system is up or
+  when a previous query failed unexpectedly.
+
+params: none
+filters: none
+`.trim();
+
+export type SkillName = "web_research" | "artefact_design" | "querydb";
 
 export const VALID_SKILL_NAMES = new Set<string>([
   "web_research",
   "artefact_design",
-  "document_extraction",
+  "querydb",
 ]);
 
 export type SkillEntry = {
@@ -16,117 +375,30 @@ export type SkillEntry = {
 
 export const skillRegistry: Record<SkillName, SkillEntry> = {
   web_research: {
-    description: "Gather accurate, current information from external sources using search_api.",
+    description: "Gather current external information using search_api and return citation-grounded responses.",
     instructions: `
-You are operating in web-research mode. Your goal is to gather accurate, current information from external sources.
-
-BEHAVIOUR
-- Decompose the user's request into focused search queries before calling search_api.
-- Run up to 3 targeted searches, each with a distinct, precise query string aimed at a different angle of the question.
-- After each result, evaluate whether you have sufficient evidence to respond or need another search.
-- Stop searching once you have enough evidence to answer fully.
-- Synthesise results into coherent prose with inline citations.
-- Never present a single search result as the full answer — synthesise across sources.
-- Cite every factual claim that originates from a tool result.
-
-INLINE CITATIONS
-- The citations array is zero-indexed: the first citation returned is index 0, the second is index 1, etc.
-- Embed citation markers directly in message_text at the exact sentence or clause the source supports.
-- Marker format: [cite:N] where N is the zero-based index into the citations array.
-- A single claim supported by one source: "Tehran was bombed [cite:0]."
-- A claim supported by multiple sources: "Over 1,000 casualties have been reported [cite:1][cite:2]."
-- Do NOT put all citations at the end — place each marker at the claim it supports.
-- Do NOT fabricate citation indices — only reference indices that exist in the citations array.
-
-SOURCE VISIBILITY
-- By default, omit show_sources from the respond action (equivalent to true) — the source carousel and citation badges will be shown.
-- Set show_sources: false when sources are supplementary and not the primary deliverable (e.g. you researched to inform a presentation or report and the artefact is the output, not the raw sources).
-- Never suppress sources when the user explicitly asked for them or when citations are the core value of the response.
-
-SUMMARY & FOLLOW-UP
-- Always include a "summary" field in your respond action for any response that required tool use.
-  - Format: 2–4 sentence prose, a few bullets, or a single sentence — whichever fits the content best.
-  - Only omit for purely conversational or clarification replies that required no tools.
-- Always include a "follow_up" field with the single most valuable next step you can offer the user.
-  - Examples: a deeper explanation, generating a presentation from the findings, a comparison, a related angle.
-  - Only omit if genuinely no natural next step exists (rare for research responses).
-
-QUALITY RULES
-- If results conflict, acknowledge the discrepancy and cite both sources.
-- If no relevant results are found after 2 searches, say so explicitly and answer from training knowledge with a caveat.
-- Do not fabricate citations or facts not present in tool results.
-- Do not include raw search metadata in the user-facing message.
+Use search_api for external research tasks.
+- Use targeted queries and stop once evidence is sufficient.
+- Cite factual claims supported by tool output.
+- If sources conflict, report the conflict clearly.
+- If results are insufficient, state that explicitly.
 `.trim(),
   },
 
   artefact_design: {
-    description: "Produce a structured deliverable document (presentation, report, brief) as render-ready HTML.",
+    description: "Produce structured document artefacts matching the requested format.",
     instructions: `
-You are operating in artefact-design mode. Your goal is to produce a high-quality structured document delivered as semantic, self-contained HTML.
-
-SUPPORTED DOCUMENT TYPES
-- presentation: slide deck using <section data-slide="N"> boundaries
-- report: long-form structured document with headings and body sections
-- brief: concise executive summary, typically 1–3 pages of content
-
-CONTENT DECOMPOSITION — always perform these four steps before writing HTML
-1. Identify the objective and intended audience.
-2. Identify the key themes and logical sections.
-3. For each section, identify supporting points, evidence, data, or comparisons.
-4. Identify a synthesis: recommendations, risks, roadmap, or next steps.
-
-HTML RULES
-- Return complete, self-contained HTML with an internal <style> block.
-- No external JS, CSS, fonts, or iframes.
-- No <script> tags of any kind.
-- Use semantic elements: <section>, <h2>, <ul>, <ol>, <table>, <figure>, <p>, <blockquote>.
-- For presentations: each <section data-slide="N"> must contain exactly one <h2> and substantial body content (70–140 words or equivalent structured density through tables, lists, or figures).
-- For presentations: default to 8–12 slides unless the user specifies otherwise.
-- Include at least one table slide (comparisons or metrics), one visual/figure slide (inline SVG chart — see rules below), and one synthesis slide (recommendations, roadmap, risks, or next steps).
-- Vary slide layouts: do not repeat shallow bullet lists on every slide — alternate between overview, deep-dive, comparison, evidence, and conclusion formats.
-- Ensure readable contrast, clear hierarchy, and consistent spacing throughout.
-
-INLINE SVG CHART RULES — follow exactly when generating a visual/figure slide:
-- Always use explicit pixel dimensions: <svg width="700" height="320" viewBox="0 0 700 320">. Never use width="100%".
-- Always include a white background as the first child: <rect width="700" height="320" fill="white" />.
-- Do NOT wrap the SVG in a placeholder div (e.g. no class="chart"). Place <svg> directly inside <figure>.
-- Axis lines must use a dark stroke: stroke="#444" stroke-width="1.5".
-- Data lines/polylines must use a bold, saturated colour: stroke="#1a73e8" or stroke="#e63946", stroke-width="3".
-- For bar charts: draw bars as <rect> elements with fill="#1a73e8" and a white or light background.
-- For line charts: draw <polyline> with visible stroke, then add <circle r="5" fill="#e63946"> at each data point.
-- Always add axis labels using <text font-size="12" fill="#333">. Y-axis labels on the left, X-axis labels below.
-- Add a chart title using <text font-size="14" font-weight="bold" fill="#222" text-anchor="middle">.
-- Ensure all data points and labels fall strictly within the viewBox bounds. Leave at least 50px margin on each side for labels.
-- Add value labels above each bar or beside each data point so the chart is readable without a legend.
-
-ARTEFACT SUMMARY
-- action.summary must describe: what was generated, what it contains, the document type chosen, and why the structure fits the user's intent and audience.
-
-SOURCE VISIBILITY
-- When you produce an artefact after running searches, set show_sources: false in the respond action wrapping your summary.
-- The research was used to build the artefact — the raw source carousel adds clutter and is not the deliverable.
-- Only set show_sources: true (or omit it) if the user explicitly asks to see the sources alongside the document.
+Choose the document type that matches user intent.
+- pptx for decks, docx for narrative reports, xlsx for tabular deliverables, pdf for styled visual docs, txt for plain text.
+- Return content schema that matches artifact type.
+- Keep structure audience-aware and concise.
 `.trim(),
   },
 
-  document_extraction: {
-    description: "Analyse content from an uploaded or referenced document.",
-    instructions: `
-You are operating in document-extraction mode.
-
-CURRENT STATE
-- Document upload and extraction tooling is not yet enabled in this environment.
-- The document_extraction tool is not currently registered or available.
-
-BEHAVIOUR
-- If the user has referenced or attached a document file, inform them politely that document processing is not yet available and that it is planned for a future release.
-- If the user has pasted document text directly into the prompt, analyse the pasted content directly from what is visible in the conversation — no tool call is needed.
-- Do not call any tool in response to a document extraction request at this stage.
-- Respond with your best analysis of any content directly visible in the user's message.
-- Clearly note any limitations in your analysis if the full document is not present.
-`.trim(),
+  querydb: {
+    description: "Query Aletia HR data and service health, including employee, leave, payroll, performance, history, and Aletia availability checks.",
+    instructions: QUERYDB_SKILL_INSTRUCTIONS,
   },
-
 };
 
 export const skillSummaryLines = Object.entries(skillRegistry)
