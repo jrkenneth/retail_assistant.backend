@@ -34,7 +34,7 @@ export class AletiaAdapter {
     this.client = axios.create({
       baseURL: env.ALETIA_API_URL ?? "http://localhost:4001",
       headers: {
-        "ALETIA_API_KEY": env.ALETIA_API_KEY ?? "",
+        "VELORA_API_KEY": env.VELORA_API_KEY ?? "",
         "Content-Type": "application/json",
       },
       timeout: 10000,
@@ -85,7 +85,7 @@ export class AletiaAdapter {
     }
 
     if (status === 401) {
-      throw new Error("Aletia API: authentication failed. Check ALETIA_API_KEY.");
+      throw new Error("Aletia API: authentication failed. Check VELORA_API_KEY.");
     }
 
     if (status === 404) {

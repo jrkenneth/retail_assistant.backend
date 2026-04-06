@@ -12,6 +12,7 @@
     "db:rollback": "knex migrate:rollback --knexfile knexfile.cjs",
     "db:make": "knex migrate:make --knexfile knexfile.cjs",
     "db:seed": "knex seed:run --knexfile knexfile.cjs",
+    "rag:embed": "tsx src/rag/generateEmbeddings.ts",
     "lint": "echo \"backend lint not configured yet\"",
     "test": "npm run typecheck"
   },

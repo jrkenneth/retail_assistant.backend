@@ -1,4 +1,5 @@
 import type { AuthenticatedUser } from "../auth/types.js";
+import { queryPolicyClient } from "../tools/queryPolicyTool.js";
 import type { ToolContext, ToolResult } from "../tools/types.js";
 import { executeQueryClient } from "../tools/executeQueryTool.js";
 import { searchClient } from "../tools/searchClient.js";
@@ -9,6 +10,7 @@ import type { SpecialistSkillName } from "./skillRegistry.js";
 export function createToolRegistry(_user: AuthenticatedUser) {
   return {
     search_api: searchClient,
+    query_policy: queryPolicyClient,
     execute_query: executeQueryClient,
   };
 }
@@ -34,6 +36,8 @@ export type ToolPlannerGuide = {
 
 export const toolDescriptions: Record<ToolName, string> = {
   search_api: "Searches external/public sources and returns high-level hits.",
+  query_policy:
+    "Retrieves the most relevant Velora policy chunks for grounded policy answers.",
   execute_query:
     "Executes structured queries against Velora retail data with server-side customer scope enforcement. Supported domains: commerce and rbac.",
 };
@@ -44,6 +48,17 @@ export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
       {
         user_request: "Find recent ecommerce returns benchmark data",
         tool_input: "ecommerce returns benchmark latest",
+      },
+    ],
+  },
+  query_policy: {
+    examples: [
+      {
+        user_request: "What is your refund policy?",
+        tool_input: {
+          query: "Velora refund policy return window original packaging refund to original payment method",
+          top_k: 3,
+        },
       },
     ],
   },
@@ -133,6 +148,28 @@ export const toolSchemas = [
   {
     type: "function" as const,
     function: {
+      name: "query_policy",
+      description:
+        "Retrieve policy text relevant to a customer policy question. Use this instead of general knowledge for returns, shipping, warranty, privacy, loyalty, payment, or prohibited-items policy questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "A policy-focused natural-language query.",
+          },
+          top_k: {
+            type: "number",
+            description: "How many relevant chunks to retrieve.",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "execute_query",
       description:
         "Execute a query against an external Velora retail data domain. Supported domains: commerce and rbac.",
@@ -170,7 +207,7 @@ export const skillToolAccess: Partial<Record<SpecialistSkillName, ToolName[]>> =
   order_management_skill: ["execute_query"],
   returns_skill: ["execute_query"],
   loyalty_skill: ["execute_query"],
-  policy_rag_skill: ["execute_query"],
+  policy_rag_skill: ["query_policy", "execute_query"],
   escalation_skill: ["execute_query"],
   governance_skill: [],
 };

@@ -136,7 +136,7 @@ SEARCH_TIMEOUT_MS=8000
 SEARCH_MAX_RESULTS=5
 
 ALETIA_API_URL=http://localhost:4001
-ALETIA_API_KEY=aletia-demo-key-2024
+VELORA_API_KEY=velora-demo-key-2024
 ```
 
 ## Run Locally

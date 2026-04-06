@@ -18,12 +18,12 @@ API version prefix:
 
 ## Authentication
 
-All `/api/v1` endpoints require an API key in the `X-API-Key` header.
+All `/api/v1` endpoints require an API key in the `VELORA_API_KEY` header.
 
 Example:
 
 ```http
-X-API-Key: aletia-demo-key-2024
+VELORA_API_KEY: velora-demo-key-2024
 ```
 
 If the header is missing or invalid, the API returns:
@@ -143,7 +143,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees?status=active&page=1&limit=5"
 ```
 
@@ -216,7 +216,7 @@ Path parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees/EMP-001"
 ```
 
@@ -265,7 +265,7 @@ Response fields:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees/EMP-001/summary"
 ```
 
@@ -307,7 +307,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/leave?employee_number=EMP-003&limit=10"
 ```
 
@@ -358,7 +358,7 @@ Returns leave balance totals for a specific employee.
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/leave/balance/EMP-003"
 ```
 
@@ -419,7 +419,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/payroll?company_id=1"
 ```
 
@@ -471,7 +471,7 @@ Returns the current payroll record for a specific employee.
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/payroll/EMP-011"
 ```
 
@@ -515,7 +515,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/performance?review_period=FY2024"
 ```
 
@@ -564,7 +564,7 @@ Returns all performance reviews for a specific employee.
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/performance/EMP-013"
 ```
 
@@ -611,7 +611,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/history/EMP-011"
 ```
 

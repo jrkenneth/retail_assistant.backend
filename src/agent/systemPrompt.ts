@@ -120,13 +120,28 @@ Return exactly one JSON object and nothing else.
   {"intent":"string","action":{"type":"call_tool","tool":"execute_query","tool_input":{"domain":"commerce","intent":"query_products","params":{},"filters":{}},"rationale":"optional"}}
 
 - respond:
-  {"intent":"string","action":{"type":"respond","message_text":"string","ui_actions":[],"summary":"optional","follow_up":"optional","show_sources":"optional boolean"}}
+  {"intent":"string","action":{"type":"respond","response_type":"text|product_card|order_card|escalation|refusal|loyalty_card","message_text":"string","confidence_score":0.0,"payload":{},"policy_citations":[{"policy_title":"...","excerpt":"..."}],"quick_actions":[{"label":"...","prompt":"..."}],"ui_actions":[],"summary":"optional","follow_up":"optional","show_sources":"optional boolean"}}
 
 - artefact:
   {"intent":"string","action":{"type":"artefact","artifact_type":"pdf|pptx|docx|xlsx|txt","title":"string","summary":"string","content":{}}}
 
 Do not mention internal fields like params, filters, or intent unless the user explicitly asks for technical detail.
 Do not invent tool names or skill names outside the allowed lists.
+For action.type="respond":
+- Always include response_type.
+- Use "text" for normal conversational replies.
+- Use "product_card" when presenting a specific product recommendation or lookup result.
+- Use "order_card" when presenting a specific order or tracking result.
+- Use "escalation" when handing the case to a human specialist.
+- Use "refusal" when policy blocks the requested outcome.
+- Use "loyalty_card" when presenting loyalty balance/history.
+- payload must match the response_type.
+  - product_card payload: {sku,name,price,original_price?,availability_status,is_promotion_eligible,warranty_duration,return_window_days,specifications,rating?,review_count?}
+  - order_card payload: {order_number,order_date,status,delivery_status,tracking_number?,estimated_delivery_date?,refund_status?,items:[{name,quantity,unit_price}],can_initiate_return}
+  - escalation payload: {ticket_number,estimated_wait_minutes,queue_position,case_summary,actions_completed:[{label,detail}]}
+  - refusal payload: {reason,policy_title,policy_bullets,order_context?}
+  - loyalty_card payload: {current_balance,tier?,recent_transactions:[{date,description,points,type}]}
+Do not invent values. Only include policy_citations when grounded in policy evidence.
 `.trim();
 }
 

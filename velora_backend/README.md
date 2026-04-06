@@ -50,7 +50,7 @@ DB_PORT=5432
 DB_NAME=velora_demo
 DB_USER=postgres
 DB_PASSWORD=
-ALETIA_API_KEY=aletia-demo-key-2024
+VELORA_API_KEY=velora-demo-key-2024
 ```
 
 ## Migrations And Seeds
@@ -66,7 +66,7 @@ The seed is idempotent and can be re-run safely.
 All `/api/v1/*` routes require:
 
 ```http
-X-API-Key: aletia-demo-key-2024
+VELORA_API_KEY: velora-demo-key-2024
 ```
 
 If the key is missing or invalid, the API returns:
@@ -101,21 +101,21 @@ Example response:
 List employees:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees?page=1&limit=5&status=active"
 ```
 
 Get one employee:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees/EMP-001"
 ```
 
 Get employee summary:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/employees/EMP-001/summary"
 ```
 
@@ -158,14 +158,14 @@ Example list response:
 List leave records:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/leave?employee_number=EMP-003&limit=10"
 ```
 
 Get leave balance:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/leave/balance/EMP-003"
 ```
 
@@ -192,14 +192,14 @@ Example balance response:
 List payroll records:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/payroll?company_id=1"
 ```
 
 Get payroll for one employee:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/payroll/EMP-011"
 ```
 
@@ -225,14 +225,14 @@ Example response:
 List performance reviews:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/performance?review_period=FY2024"
 ```
 
 Get performance history for one employee:
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/performance/EMP-013"
 ```
 
@@ -265,7 +265,7 @@ Example list response:
 ### Employment History
 
 ```bash
-curl -H "X-API-Key: aletia-demo-key-2024" \
+curl -H "VELORA_API_KEY: velora-demo-key-2024" \
   "http://localhost:4001/api/v1/history/EMP-011"
 ```
 

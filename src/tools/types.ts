@@ -1,6 +1,6 @@
 import type { AuthenticatedUser } from "../auth/types.js";
 
-export type ToolResultKind = "status" | "record" | "list" | "search";
+export type ToolResultKind = "status" | "record" | "list" | "search" | "policy";
 
 export type ToolResultEnvelope<TPayload> = {
   ok: boolean;

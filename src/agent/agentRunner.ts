@@ -1,6 +1,7 @@
 import type { ArtifactType } from "../artifacts/types.js";
 import { materializeArtifactFile } from "../artifacts/generators.js";
 import type { AuthenticatedUser } from "../auth/types.js";
+import type { ChatResponse } from "../chat/contracts.js";
 import { env } from "../config.js";
 import type { ChatRequest } from "../chat/contracts.js";
 import { logEvent } from "../chat/logger.js";
@@ -326,6 +327,7 @@ async function executeToolWithRetry(
 
 const TOOL_STATUS_MESSAGES: Partial<Record<string, string>> = {
   search_api: "Searching the web...",
+  query_policy: "Checking Velora policies...",
   execute_query: "Checking Velora data...",
 };
 
@@ -341,6 +343,63 @@ function buildToolStepResult(step: number, result: ToolOutcome): AgentStepResult
     citation: result.citation,
     error_message: result.errorMessage,
   };
+}
+
+function getConfidenceScore(toolResults: ToolOutcome[]): number {
+  const lastSuccessfulPolicyResult = [...toolResults]
+    .reverse()
+    .find((result) => result.status === "success" && result.tool === "query_policy");
+
+  if (lastSuccessfulPolicyResult) {
+    const score = Number(
+      (lastSuccessfulPolicyResult.data.payload as Record<string, unknown> | undefined)?.max_similarity ?? 0,
+    );
+    return Math.max(0, Math.min(1, score));
+  }
+
+  const hasDeterministicToolData = toolResults.some(
+    (result) => result.status === "success" && result.tool === "execute_query",
+  );
+
+  if (hasDeterministicToolData) {
+    return 0.95;
+  }
+
+  return 0.4;
+}
+
+function applyConfidencePolicy(
+  message: string,
+  confidenceScore: number,
+  responseType: "text" | "product_card" | "order_card" | "escalation" | "refusal" | "loyalty_card",
+): {
+  message: string;
+  responseType?: "text" | "product_card" | "order_card" | "escalation" | "refusal" | "loyalty_card";
+  followUp?: string;
+  summary?: string;
+} {
+  if (responseType === "escalation" || responseType === "refusal") {
+    return { message };
+  }
+
+  if (confidenceScore < 0.5) {
+    return {
+      message:
+        "I’m not confident enough to answer that based on verified Velora information. I can help escalate this to a human specialist if you’d like.",
+      responseType: "refusal",
+      followUp: "If you want, I can help you continue with a support escalation.",
+      summary: "Low-confidence response prevented; escalation offered.",
+    };
+  }
+
+  if (confidenceScore < 0.75) {
+    const suffix = " I recommend verifying this with our support team.";
+    return {
+      message: message.endsWith(suffix) ? message : `${message}${suffix}`,
+    };
+  }
+
+  return { message };
 }
 
 async function persistArtifactAction(
@@ -432,6 +491,11 @@ export async function runAgent(
   const toolResults: ToolOutcome[] = [];
   const stepResults: AgentStepResult[] = [];
   let finalMessage = "";
+  let finalResponseType: "text" | "product_card" | "order_card" | "escalation" | "refusal" | "loyalty_card" = "text";
+  let finalPayload: ChatResponse["payload"];
+  let finalPolicyCitations: ChatResponse["policy_citations"];
+  let finalQuickActions: ChatResponse["quick_actions"];
+  let finalConfidenceScore: number | undefined;
   let finalUiActions: AgentUiAction[] = [];
   let finalSummary: string | undefined;
   let finalFollowUp: string | undefined;
@@ -445,6 +509,11 @@ export async function runAgent(
 
   const applyRespondAction = (action: Extract<AgentAction, { type: "respond" }>) => {
     finalMessage = action.message_text;
+    finalResponseType = action.response_type;
+    finalPayload = action.payload;
+    finalPolicyCitations = action.policy_citations;
+    finalQuickActions = action.quick_actions;
+    finalConfidenceScore = action.confidence_score;
     finalUiActions = action.ui_actions ?? [];
     finalSummary = action.summary;
     finalFollowUp = action.follow_up;
@@ -734,7 +803,30 @@ export async function runAgent(
         uri: h.url?.trim() || undefined,
         image: h.image?.trim() || undefined,
       }));
-    });
+    })
+    .concat(
+      stepResults
+        .filter(
+          (s) =>
+            s.tool === "query_policy" &&
+            s.status === "success" &&
+            s.data?.kind === "policy" &&
+            typeof s.data.payload === "object" &&
+            s.data.payload !== null &&
+            Array.isArray((s.data.payload as { chunks?: unknown }).chunks),
+        )
+        .flatMap((s) => {
+          const chunks = (s.data.payload as {
+            chunks: Array<{ policy_title?: string; chunk_text?: string }>;
+          }).chunks;
+          return chunks.map((chunk) => ({
+            label: "Policy",
+            source: chunk.policy_title?.trim() || "Velora Policy",
+            uri: undefined,
+            image: undefined,
+          }));
+        }),
+    );
 
   const skillTrace = stepResults
     .filter((s) => s.tool.startsWith("activated_skill:"))
@@ -756,12 +848,25 @@ export async function runAgent(
   ];
 
   const hasErrors = toolResults.some((result) => result.status === "error");
+  const confidenceScore = getConfidenceScore(toolResults);
+  const confidenceApplied = applyConfidencePolicy(finalMessage, confidenceScore, finalResponseType);
+  finalMessage = confidenceApplied.message;
+  finalResponseType = confidenceApplied.responseType ?? finalResponseType;
+  finalSummary = confidenceApplied.summary ?? finalSummary;
+  finalFollowUp = confidenceApplied.followUp ?? finalFollowUp;
+  finalConfidenceScore = finalConfidenceScore ?? confidenceScore;
 
   return {
+    response_type: finalResponseType,
+    message: finalMessage,
     message_text: finalMessage,
+    payload: finalPayload,
+    policy_citations: finalPolicyCitations,
+    quick_actions: finalQuickActions,
     ui_actions: finalUiActions,
     citations,
     tool_trace: trace,
+    confidence_score: finalConfidenceScore,
     summary: finalSummary,
     follow_up: finalFollowUp,
     show_sources: finalShowSources,

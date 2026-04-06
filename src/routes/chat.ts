@@ -49,6 +49,8 @@ export const chatRouter = Router();
 
 function mapValidationError(correlationId: string): ChatResponse {
   return {
+    response_type: "text",
+    message: `I couldn't complete the request because input format was invalid. I tried to validate request schema. You can fix the request body and retry. Ref: ${correlationId}.`,
     message_text: `I couldn't complete the request because input format was invalid. I tried to validate request schema. You can fix the request body and retry. Ref: ${correlationId}.`,
     ui_actions: [],
     citations: [],
@@ -66,6 +68,8 @@ function mapValidationError(correlationId: string): ChatResponse {
 
 function mapInternalError(correlationId: string): ChatResponse {
   return {
+    response_type: "text",
+    message: `I couldn't complete the request because an internal error occurred. I tried executing the request through orchestrator flow. You can retry now or try a simplified prompt. Ref: ${correlationId}.`,
     message_text: `I couldn't complete the request because an internal error occurred. I tried executing the request through orchestrator flow. You can retry now or try a simplified prompt. Ref: ${correlationId}.`,
     ui_actions: [],
     citations: [],
@@ -142,9 +146,15 @@ async function processChatRequest(
       role: "assistant",
       messageText: response.message_text,
       payloadJson: {
+        response_type: response.response_type,
+        message: response.message,
+        payload: response.payload,
+        policy_citations: response.policy_citations,
+        quick_actions: response.quick_actions,
         ui_actions: response.ui_actions,
         citations: response.citations,
         errors: response.errors,
+        confidence_score: response.confidence_score,
         summary: response.summary,
         follow_up: response.follow_up,
         show_sources: response.show_sources,

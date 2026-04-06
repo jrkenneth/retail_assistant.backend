@@ -24,10 +24,14 @@ const envSchema = z.object({
   TAVILY_API_KEY: z.string().optional(),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
   SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
+  ECOMMERCE_API_URL: z.string().default(process.env.VELORA_API_URL ?? process.env.ALETIA_API_URL ?? "http://localhost:4001"),
+  ECOMMERCE_API_KEY: z.string().default(process.env.VELORA_API_KEY ?? process.env.VELORA_API_KEY ?? ""),
+  ECOMMERCE_DATABASE_URL: z.string().url().optional(),
+  EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   VELORA_API_URL: z.string().default(process.env.ALETIA_API_URL ?? "http://localhost:4001"),
-  VELORA_API_KEY: z.string().default(process.env.ALETIA_API_KEY ?? ""),
+  VELORA_API_KEY: z.string().default(process.env.VELORA_API_KEY ?? ""),
   ALETIA_API_URL: z.string().optional(),
-  ALETIA_API_KEY: z.string().optional(),
+  VELORA_API_KEY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

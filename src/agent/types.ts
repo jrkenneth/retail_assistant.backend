@@ -48,7 +48,12 @@ export type AgentAction =
   | {
       type: "respond";
       intent: string;
+      response_type: "text" | "product_card" | "order_card" | "escalation" | "refusal" | "loyalty_card";
       message_text: string;
+      payload?: ChatResponse["payload"];
+      confidence_score?: number;
+      policy_citations?: ChatResponse["policy_citations"];
+      quick_actions?: ChatResponse["quick_actions"];
       ui_actions?: AgentUiAction[];
       summary?: string;
       follow_up?: string;

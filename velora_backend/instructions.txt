@@ -17,7 +17,7 @@ TECH STACK
 - Database:   PostgreSQL
 - ORM/Query:  Knex.js (with migrations and seeds)
 - Language:   TypeScript
-- Auth:       API key via request header (X-API-Key)
+- Auth:       API key via request header (VELORA_API_KEY)
 - Port:       4001
 
 All responses must be JSON.
@@ -59,9 +59,9 @@ AUTHENTICATION
 
 All routes (except GET /health) require the following header:
 
-  X-API-Key: <api_key>
+  VELORA_API_KEY: <api_key>
 
-The API key is stored in the .env file as ALETIA_API_KEY.
+The API key is stored in the .env file as VELORA_API_KEY.
 If the header is missing or invalid, return:
 
   HTTP 401
@@ -366,7 +366,7 @@ API ENDPOINTS
 ════════════════════════════════════════════════════════════
 
 All endpoints are prefixed with /api/v1
-All endpoints require X-API-Key header.
+All endpoints require VELORA_API_KEY header.
 All list endpoints support pagination via:
   ?page=1&limit=50 (default limit: 50, max: 200)
 
@@ -572,7 +572,7 @@ DB_PORT=5432
 DB_NAME=aletia_hr
 DB_USER=postgres
 DB_PASSWORD=
-ALETIA_API_KEY=aletia-demo-key-2024
+VELORA_API_KEY=velora-demo-key-2024
 
 ════════════════════════════════════════════════════════════
 ADDITIONAL REQUIREMENTS

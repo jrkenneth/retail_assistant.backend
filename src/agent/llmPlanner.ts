@@ -6,6 +6,16 @@ import { AGENT_SYSTEM_PROMPT } from "./systemPrompt.js";
 import type { ModeOptions } from "./systemPrompt.js";
 import { artifactTypeSchema, type ArtifactType } from "../artifacts/types.js";
 import {
+  type ChatResponse,
+  escalationPayloadSchema,
+  loyaltyPayloadSchema,
+  orderCardPayloadSchema,
+  policyCitationSchema,
+  productCardPayloadSchema,
+  quickActionSchema,
+  refusalPayloadSchema,
+} from "../chat/contracts.js";
+import {
   SPECIALIST_SKILL_NAMES,
   specialistSkillSummaryLines,
   type SpecialistSkillName,
@@ -49,6 +59,17 @@ function normalizeToolCallInput(tool: ToolName, toolInput: unknown): AgentToolIn
     return asString(toolInput);
   }
 
+  if (tool === "query_policy") {
+    if (!isPlainObject(toolInput)) {
+      return { query: "", top_k: 3 };
+    }
+
+    return {
+      query: asString(toolInput.query),
+      ...(typeof toolInput.top_k === "number" ? { top_k: toolInput.top_k } : {}),
+    };
+  }
+
   if (!isPlainObject(toolInput)) {
     return {};
   }
@@ -65,6 +86,10 @@ function validateToolCallInput(tool: ToolName, toolInput: unknown): boolean {
   const normalizedToolInput = normalizeToolCallInput(tool, toolInput);
   if (tool === "search_api") {
     return typeof normalizedToolInput === "string" && Boolean(normalizedToolInput.trim());
+  }
+
+  if (tool === "query_policy" && isPlainObject(normalizedToolInput)) {
+    return Boolean(asString(normalizedToolInput.query));
   }
 
   if (tool === "execute_query" && isPlainObject(normalizedToolInput)) {
@@ -278,10 +303,67 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
     if (!messageText) {
       return null;
     }
+    const responseType = asString(actionRow.response_type) as AgentAction["type"] extends never
+      ? never
+      : "text" | "product_card" | "order_card" | "escalation" | "refusal" | "loyalty_card";
+    const validResponseTypes = new Set([
+      "text",
+      "product_card",
+      "order_card",
+      "escalation",
+      "refusal",
+      "loyalty_card",
+    ]);
+    const normalizedResponseType = validResponseTypes.has(responseType) ? responseType : "text";
+
+    let parsedPayload: ChatResponse["payload"];
+    if (actionRow.payload && isPlainObject(actionRow.payload)) {
+      const payloadCandidate = actionRow.payload;
+      const schema =
+        normalizedResponseType === "product_card"
+          ? productCardPayloadSchema
+          : normalizedResponseType === "order_card"
+            ? orderCardPayloadSchema
+            : normalizedResponseType === "escalation"
+              ? escalationPayloadSchema
+              : normalizedResponseType === "refusal"
+                ? refusalPayloadSchema
+                : normalizedResponseType === "loyalty_card"
+                  ? loyaltyPayloadSchema
+                  : null;
+
+      if (schema) {
+        const parsedSchema = schema.safeParse(payloadCandidate);
+        if (parsedSchema.success) {
+          parsedPayload = parsedSchema.data;
+        }
+      }
+    }
+
+    const policyCitations = Array.isArray(actionRow.policy_citations)
+      ? actionRow.policy_citations
+          .map((item) => policyCitationSchema.safeParse(item))
+          .filter((item) => item.success)
+          .map((item) => item.data)
+      : undefined;
+
+    const quickActions = Array.isArray(actionRow.quick_actions)
+      ? actionRow.quick_actions
+          .map((item) => quickActionSchema.safeParse(item))
+          .filter((item) => item.success)
+          .map((item) => item.data)
+      : undefined;
+
     return {
       type: "respond",
       intent,
+      response_type: normalizedResponseType,
       message_text: messageText,
+      payload: parsedPayload,
+      confidence_score:
+        typeof actionRow.confidence_score === "number" ? actionRow.confidence_score : undefined,
+      policy_citations: policyCitations,
+      quick_actions: quickActions,
       ui_actions: toUiActions(actionRow.ui_actions),
       summary:
         typeof actionRow.summary === "string" && actionRow.summary.trim()
