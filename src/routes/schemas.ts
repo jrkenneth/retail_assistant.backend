@@ -13,7 +13,10 @@ export const createMessageSchema = z.object({
 });
 
 export const renameSessionSchema = z.object({
-  title: z.string().min(1).max(120),
+  title: z.string().min(1).max(120).optional(),
+  is_closed: z.boolean().optional(),
+}).refine((payload) => payload.title !== undefined || payload.is_closed !== undefined, {
+  message: "Either title or is_closed must be provided.",
 });
 
 export const createAccessRequestSchema = z.object({

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import db from "../db.js";
+import db from "../db/knex.js";
 import { notFound } from "../errors.js";
 import { asyncHandler, paginate, parsePagination } from "../utils.js";
 
@@ -101,6 +101,46 @@ router.get(
         items,
       },
     });
+  })
+);
+
+router.get(
+  "/:orderNumber/tracking",
+  asyncHandler(async (req, res) => {
+    const order = await buildOrderQuery()
+      .where("orders.order_number", req.params.orderNumber)
+      .first();
+
+    if (!order) {
+      throw notFound("Order not found");
+    }
+
+    res.status(200).json({
+      data: {
+        order_number: order.order_number,
+        tracking_number: order.tracking_number,
+        status: order.status,
+        delivery_status: order.delivery_status,
+        estimated_delivery_date: order.estimated_delivery_date,
+        actual_delivery_date: order.actual_delivery_date,
+      },
+    });
+  })
+);
+
+router.get(
+  "/:orderNumber/items",
+  asyncHandler(async (req, res) => {
+    const order = await buildOrderQuery()
+      .where("orders.order_number", req.params.orderNumber)
+      .first();
+
+    if (!order) {
+      throw notFound("Order not found");
+    }
+
+    const items = await loadOrderItems(String(order.id));
+    res.status(200).json({ data: items });
   })
 );
 

@@ -68,6 +68,7 @@ export const productCardPayloadSchema = z.object({
   warranty_duration: z.string().min(1),
   return_window_days: z.number().int().nonnegative(),
   specifications: z.record(z.string()),
+  image_url: z.string().optional(),
   rating: z.number().optional(),
   review_count: z.number().int().optional(),
 });

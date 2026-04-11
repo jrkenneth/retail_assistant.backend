@@ -5,6 +5,7 @@ import type { ChatResponse } from "../chat/contracts.js";
 import { env } from "../config.js";
 import type { ChatRequest } from "../chat/contracts.js";
 import { logEvent } from "../chat/logger.js";
+import { logAuditEvent } from "../audit/auditLogger.js";
 import { createArtifact } from "../db/repositories/artifactsRepo.js";
 import {
   BACKOFF_MS,
@@ -149,20 +150,36 @@ function getStructuredToolInput(
 
 function isSimpleLookupPrompt(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  const hasLookupIntent =
-    /\b(show|list|find|get|give me|who is|who are|what is|tell me|display)\b/.test(normalized) &&
-    /\b(product|products|order|orders|tracking|delivery|shipment|return|refund|ticket|support|loyalty|policy|policies|warranty)\b/.test(normalized);
-
-  if (!hasLookupIntent) {
-    return false;
-  }
 
   const complexSignals =
     /\b(compare|comparison|versus|vs|benchmark|market|current trends|latest|recent|online|web|search|research|report|brief|deck|presentation|combine|merge|summari[sz]e and|and then|along with)\b/.test(
       normalized,
     );
+  if (complexSignals) {
+    return false;
+  }
 
-  return !complexSignals;
+  // Count how many distinct retail domains are referenced.
+  // Multi-domain prompts (e.g. "find headphones and check my return") are complex.
+  const domainHits = [
+    /\b(product|products|spec|specs|warranty|availability|stock)\b/.test(normalized),
+    /\b(order|orders|tracking|track|shipment|delivery|delivered|package)\b/.test(normalized),
+    /\b(return|returns|refund|exchange)\b/.test(normalized),
+    /\b(loyalty|points|reward|rewards)\b/.test(normalized),
+    /\b(policy|policies|terms)\b/.test(normalized),
+    /\b(ticket|support)\b/.test(normalized),
+  ].filter(Boolean).length;
+
+  if (domainHits > 1) {
+    return false;
+  }
+
+  const hasLookupIntent =
+    /\b(show|list|find|get|give me|who is|who are|what is|tell me|display|check|track|view|see|look up|my)\b/.test(
+      normalized,
+    ) && domainHits >= 1;
+
+  return hasLookupIntent;
 }
 
 function shouldForceRespondAfterSuccessfulTool(prompt: string, result: ToolOutcome): boolean {
@@ -346,23 +363,29 @@ function buildToolStepResult(step: number, result: ToolOutcome): AgentStepResult
 }
 
 function getConfidenceScore(toolResults: ToolOutcome[]): number {
+  // Deterministic data from the platform always takes priority.
+  // A low policy similarity score should not override a confirmed data result.
+  const hasDeterministicToolData = toolResults.some(
+    (result) => result.status === "success" && result.tool === "execute_query",
+  );
+  if (hasDeterministicToolData) {
+    return 0.95;
+  }
+
   const lastSuccessfulPolicyResult = [...toolResults]
     .reverse()
     .find((result) => result.status === "success" && result.tool === "query_policy");
 
   if (lastSuccessfulPolicyResult) {
-    const score = Number(
-      (lastSuccessfulPolicyResult.data.payload as Record<string, unknown> | undefined)?.max_similarity ?? 0,
-    );
+    const policyPayload = lastSuccessfulPolicyResult.data.payload as Record<string, unknown> | undefined;
+    const chunksCount = Array.isArray(policyPayload?.chunks) ? policyPayload.chunks.length : 0;
+    // If no chunks were returned (policy DB not seeded or no match at all),
+    // don't penalise confidence — fall through to the neutral default.
+    if (chunksCount === 0) {
+      return 0.4;
+    }
+    const score = Number(policyPayload?.max_similarity ?? 0);
     return Math.max(0, Math.min(1, score));
-  }
-
-  const hasDeterministicToolData = toolResults.some(
-    (result) => result.status === "success" && result.tool === "execute_query",
-  );
-
-  if (hasDeterministicToolData) {
-    return 0.95;
   }
 
   return 0.4;
@@ -740,6 +763,34 @@ export async function runAgent(
     }
 
     if (nextAction.type === "respond") {
+      // RAG enforcement: if the policy skill was loaded but query_policy has not yet
+      // been called successfully, force a retrieval before accepting the response.
+      // This prevents the LLM from answering policy questions from training knowledge alone.
+      if (
+        loadedSkills.has("policy_rag_skill") &&
+        toolCalls < maxToolCalls &&
+        !toolResults.some((r) => r.tool === "query_policy" && r.status === "success")
+      ) {
+        onStatus?.("tool", "Checking Velora policies...");
+        const policyQuery = request.prompt.slice(0, 300);
+        const policyOutcome = await executeTool(
+          "query_policy",
+          { query: policyQuery, top_k: 3 },
+          correlationId,
+          user,
+          ipAddress,
+        );
+        toolCalls += 1;
+        toolResults.push(policyOutcome);
+        stepResults.push(buildToolStepResult(stepResults.length + 1, policyOutcome));
+        logEvent("info", "agent.rag.enforced", correlationId, {
+          tool: "query_policy",
+          status: policyOutcome.status,
+        });
+        // Continue the loop so the LLM can incorporate the retrieved policy chunks.
+        continue;
+      }
+
       onStatus?.("responding", RESPONSE_STATUS_MESSAGE);
       applyRespondAction(nextAction);
       break;
@@ -855,6 +906,27 @@ export async function runAgent(
   finalSummary = confidenceApplied.summary ?? finalSummary;
   finalFollowUp = confidenceApplied.followUp ?? finalFollowUp;
   finalConfidenceScore = finalConfidenceScore ?? confidenceScore;
+
+  if (finalResponseType === "refusal" || finalResponseType === "escalation") {
+    await logAuditEvent({
+      customer_id: user.customer_id,
+      customer_email: user.email,
+      event_type: finalResponseType === "refusal" ? "refusal_triggered" : "escalation_triggered",
+      domain: "commerce",
+      intent: routedCapabilities.skills[0] ?? "general_support",
+      params_snapshot: {
+        prompt: request.prompt,
+        session_id: request.session_id,
+        confidence_score: finalConfidenceScore,
+      },
+      reason:
+        finalSummary ??
+        (finalResponseType === "refusal"
+          ? "Low-confidence or policy-bound refusal was returned."
+          : "Escalation flow initiated."),
+      ip_address: ipAddress ?? null,
+    });
+  }
 
   return {
     response_type: finalResponseType,

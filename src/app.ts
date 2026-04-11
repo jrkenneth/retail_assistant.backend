@@ -6,7 +6,10 @@ import { db } from "./db/client.js";
 import { accessRequestsRouter } from "./routes/accessRequests.js";
 import { authRouter } from "./routes/auth.js";
 import { artifactsRouter } from "./routes/artifacts.js";
+import { catalogRouter } from "./routes/catalog.js";
 import { chatRouter } from "./routes/chat.js";
+import { myOrdersRouter } from "./routes/myOrders.js";
+import { myReturnsRouter } from "./routes/myReturns.js";
 import { sessionsRouter } from "./routes/sessions.js";
 
 export const app = express();
@@ -33,6 +36,9 @@ app.use("/chat", chatRouter);
 app.use("/sessions", sessionsRouter);
 app.use("/artifacts", artifactsRouter);
 app.use("/access-requests", accessRequestsRouter);
+app.use("/catalog", catalogRouter);
+app.use("/my-orders", myOrdersRouter);
+app.use("/my-returns", myReturnsRouter);
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof Error) {

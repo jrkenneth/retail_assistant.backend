@@ -2,7 +2,7 @@ import { unlink } from "node:fs/promises";
 import { Router } from "express";
 import { createMessage, listMessagesByOwnedSession } from "../db/repositories/messagesRepo.js";
 import { listArtifactsByOwnedSession } from "../db/repositories/artifactsRepo.js";
-import { createSession, deleteSession, getSessionById, listSessions, renameSession, touchSession } from "../db/repositories/sessionsRepo.js";
+import { createSession, deleteSession, getSessionById, listSessions, renameSession, setSessionClosed, touchSession } from "../db/repositories/sessionsRepo.js";
 import { listTracesByOwnedSession } from "../db/repositories/tracesRepo.js";
 import { asyncRoute, sendNotFound } from "./routeUtils.js";
 import { createMessageSchema, createSessionSchema, renameSessionSchema } from "./schemas.js";
@@ -10,30 +10,30 @@ import { createMessageSchema, createSessionSchema, renameSessionSchema } from ".
 export const sessionsRouter = Router();
 
 sessionsRouter.get("/", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
-  const sessions = await listSessions(employeeNumber);
+  const customerNumber = req.customer!.customer_number;
+  const sessions = await listSessions(customerNumber);
   res.status(200).json({ items: sessions });
 }));
 
 sessionsRouter.post("/", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
+  const customerNumber = req.customer!.customer_number;
   const payload = createSessionSchema.parse(req.body);
-  const session = await createSession(payload.id, payload.title, employeeNumber);
+  const session = await createSession(payload.id, payload.title, customerNumber);
   res.status(201).json(session);
 }));
 
 sessionsRouter.get("/:sessionId/messages", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
+  const customerNumber = req.customer!.customer_number;
   const { sessionId } = req.params;
-  const session = await getSessionById(sessionId, employeeNumber);
+  const session = await getSessionById(sessionId, customerNumber);
   if (!session) {
     sendNotFound(res, "session_not_found");
     return;
   }
 
   const [messages, traces] = await Promise.all([
-    listMessagesByOwnedSession(sessionId, employeeNumber),
-    listTracesByOwnedSession(sessionId, employeeNumber),
+    listMessagesByOwnedSession(sessionId, customerNumber),
+    listTracesByOwnedSession(sessionId, customerNumber),
   ]);
 
   res.status(200).json({
@@ -44,11 +44,15 @@ sessionsRouter.get("/:sessionId/messages", asyncRoute(async (req, res) => {
 }));
 
 sessionsRouter.post("/:sessionId/messages", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
+  const customerNumber = req.customer!.customer_number;
   const { sessionId } = req.params;
-  const session = await getSessionById(sessionId, employeeNumber);
+  const session = await getSessionById(sessionId, customerNumber);
   if (!session) {
     sendNotFound(res, "session_not_found");
+    return;
+  }
+  if (session.closed_at) {
+    res.status(409).json({ error: "session_closed" });
     return;
   }
 
@@ -60,36 +64,42 @@ sessionsRouter.post("/:sessionId/messages", asyncRoute(async (req, res) => {
     messageText: payload.message_text,
     payloadJson: payload.payload_json,
   });
-  await touchSession(sessionId, employeeNumber);
+  await touchSession(sessionId, customerNumber);
   res.status(201).json(message);
 }));
 
 sessionsRouter.patch("/:sessionId", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
+  const customerNumber = req.customer!.customer_number;
   const { sessionId } = req.params;
-  const session = await getSessionById(sessionId, employeeNumber);
+  const session = await getSessionById(sessionId, customerNumber);
   if (!session) {
     sendNotFound(res, "session_not_found");
     return;
   }
   const payload = renameSessionSchema.parse(req.body);
-  const updated = await renameSession(sessionId, payload.title, employeeNumber);
+  let updated = session;
+  if (payload.title !== undefined) {
+    updated = (await renameSession(sessionId, payload.title, customerNumber)) ?? updated;
+  }
+  if (payload.is_closed !== undefined) {
+    updated = (await setSessionClosed(sessionId, customerNumber, payload.is_closed)) ?? updated;
+  }
   res.status(200).json(updated);
 }));
 
 sessionsRouter.delete("/:sessionId", asyncRoute(async (req, res) => {
-  const employeeNumber = req.user!.employee_number;
+  const customerNumber = req.customer!.customer_number;
   const { sessionId } = req.params;
-  const session = await getSessionById(sessionId, employeeNumber);
+  const session = await getSessionById(sessionId, customerNumber);
   if (!session) {
     sendNotFound(res, "session_not_found");
     return;
   }
 
-  const artifacts = await listArtifactsByOwnedSession(sessionId, employeeNumber);
+  const artifacts = await listArtifactsByOwnedSession(sessionId, customerNumber);
   const filePaths = artifacts.map((a) => a.file_path).filter((p): p is string => Boolean(p));
 
-  await deleteSession(sessionId, employeeNumber);
+  await deleteSession(sessionId, customerNumber);
   await Promise.allSettled(filePaths.map((p) => unlink(p)));
 
   res.status(204).end();

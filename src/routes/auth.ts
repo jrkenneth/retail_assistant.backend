@@ -1,7 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { veloraAdapter } from "../adapters/velora/veloraAdapter.js";
+import { ecommerceAdapter } from "../adapters/ecommerce/ecommerceAdapter.js";
 import { authenticateToken } from "../auth/authenticateToken.js";
 import { signAuthToken } from "../auth/jwt.js";
 import { addToBlacklist } from "../auth/tokenBlacklist.js";
@@ -14,7 +14,10 @@ const loginSchema = z.object({
 });
 
 const customerProfileSchema = z.object({
+  customer_id: z.string(),
   customer_number: z.string(),
+  first_name: z.string(),
+  last_name: z.string(),
   full_name: z.string(),
   email: z.string().email(),
   account_status: z.string(),
@@ -47,17 +50,24 @@ authRouter.post("/login", loginRateLimiter, asyncRoute(async (req, res) => {
   const payload = loginSchema.parse(req.body);
 
   try {
-    const result = await veloraAdapter.execute("authenticate_customer", payload);
+    const result = await ecommerceAdapter.execute("authenticate_customer", payload);
     const customer = customerProfileSchema.parse(result.data);
     const user = {
       ...customer,
-      employee_number: customer.customer_number,
       role: "Customer",
       access_role: "customer",
       department: "Customers",
       entity: "Velora",
     } satisfies AuthenticatedUser;
-    const token = signAuthToken(user);
+    const token = signAuthToken({
+      customer_id: customer.customer_id,
+      customer_number: customer.customer_number,
+      first_name: customer.first_name,
+      last_name: customer.last_name,
+      email: customer.email,
+      loyalty_points: customer.loyalty_points,
+      account_status: customer.account_status,
+    });
 
     res.status(200).json({ token, user });
   } catch (error) {
@@ -75,5 +85,5 @@ authRouter.post("/logout", authenticateToken, asyncRoute(async (req, res) => {
 }));
 
 authRouter.get("/me", authenticateToken, asyncRoute(async (req, res) => {
-  res.status(200).json({ user: req.user });
+  res.status(200).json({ user: req.customer });
 }));

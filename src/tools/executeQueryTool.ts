@@ -1,7 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { sanitizeAccessRequestInput } from "../accessRequests/sanitizeAccessRequest.js";
-import { veloraAdapter } from "../adapters/velora/veloraAdapter.js";
+import { ecommerceAdapter } from "../adapters/ecommerce/ecommerceAdapter.js";
 import { logAuditEvent } from "../audit/auditLogger.js";
 import type { AuthenticatedUser } from "../auth/types.js";
 import { env } from "../config.js";
@@ -18,13 +18,19 @@ const executeQuerySchema = z.object({
 
 const CUSTOMER_SCOPED_INTENTS = new Set([
   "get_customer_profile",
-  "query_orders",
+  "get_order_history",
   "get_order_detail",
+  "track_order",
+  "get_order_items",
+  "initiate_return",
+  "get_return_status",
   "query_returns",
   "get_return_detail",
   "query_support_tickets",
   "get_support_ticket",
   "create_support_ticket",
+  "get_loyalty_balance",
+  "get_loyalty_history",
   "get_loyalty_summary",
 ]);
 
@@ -32,9 +38,12 @@ type QueryPayload = z.infer<typeof executeQuerySchema>;
 
 const customerStatusSchema = z.object({
   data: z.object({
+    customer_id: z.string().optional().default(""),
     account_status: z.string(),
     loyalty_points: z.coerce.number(),
     email: z.string(),
+    first_name: z.string().optional().default(""),
+    last_name: z.string().optional().default(""),
     full_name: z.string(),
     customer_number: z.string(),
   }),
@@ -62,7 +71,7 @@ async function refreshUserContext(user: AuthenticatedUser): Promise<{
   isActive: boolean;
   user: AuthenticatedUser;
 }> {
-  const statusResult = await veloraAdapter.execute("validate_customer_status", {
+  const statusResult = await ecommerceAdapter.execute("validate_customer_status", {
     customer_number: user.customer_number,
   });
 
@@ -73,8 +82,10 @@ async function refreshUserContext(user: AuthenticatedUser): Promise<{
   const parsed = customerStatusSchema.parse(statusResult);
   const refreshedUser: AuthenticatedUser = {
     ...user,
+    customer_id: parsed.data.customer_id || user.customer_id,
     customer_number: parsed.data.customer_number,
-    employee_number: parsed.data.customer_number,
+    first_name: parsed.data.first_name || user.first_name,
+    last_name: parsed.data.last_name || user.last_name,
     full_name: parsed.data.full_name,
     email: parsed.data.email,
     account_status: parsed.data.account_status,
@@ -347,7 +358,7 @@ export const executeQueryTool = new DynamicStructuredTool({
   func: async ({ domain, intent, params, filters }) => {
     switch (domain) {
       case "commerce": {
-        const result = await veloraAdapter.execute(intent, params, filters);
+        const result = await ecommerceAdapter.execute(intent, params, filters);
         return JSON.stringify(result);
       }
       default:
@@ -416,9 +427,8 @@ export async function executeQueryClient(
   if (!policy.allowedIntents.includes(payload.intent)) {
     const denied = makeAccessDenied();
     await logAuditEvent({
-      employee_number: effectiveUser.customer_number,
-      full_name: effectiveUser.full_name,
-      role: effectiveUser.access_role,
+      customer_id: effectiveUser.customer_id,
+      customer_email: effectiveUser.email,
       event_type: "access_denied",
       domain: payload.domain,
       intent: payload.intent,
@@ -449,9 +459,8 @@ export async function executeQueryClient(
   const scopedPayload = enforceScope(payload, effectiveUser);
   for (const violation of scopedPayload.scopeViolations) {
     await logAuditEvent({
-      employee_number: effectiveUser.customer_number,
-      full_name: effectiveUser.full_name,
-      role: effectiveUser.access_role,
+      customer_id: effectiveUser.customer_id,
+      customer_email: effectiveUser.email,
       event_type: "scope_violation",
       domain: payload.domain,
       intent: payload.intent,
@@ -464,15 +473,14 @@ export async function executeQueryClient(
     });
   }
 
-  const rawResult = await veloraAdapter.execute(payload.intent, scopedPayload.params, scopedPayload.filters);
+  const rawResult = await ecommerceAdapter.execute(payload.intent, scopedPayload.params, scopedPayload.filters);
   let parsedResult = rawResult as Record<string, unknown>;
 
   if (!verifyPostQueryScope(payload.intent, parsedResult, effectiveUser)) {
     const denied = makeAccessDenied();
     await logAuditEvent({
-      employee_number: effectiveUser.customer_number,
-      full_name: effectiveUser.full_name,
-      role: effectiveUser.access_role,
+      customer_id: effectiveUser.customer_id,
+      customer_email: effectiveUser.email,
       event_type: "access_denied",
       domain: payload.domain,
       intent: payload.intent,

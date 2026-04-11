@@ -5,7 +5,7 @@ dotenv.config();
 
 const shared: Partial<Knex.Config> = {
   client: "pg",
-  connection: {
+  connection: process.env.DATABASE_URL ?? {
     host: process.env.DB_HOST ?? "localhost",
     port: Number(process.env.DB_PORT ?? 5432),
     database: process.env.DB_NAME ?? "velora_demo",
@@ -13,11 +13,11 @@ const shared: Partial<Knex.Config> = {
     password: process.env.DB_PASSWORD ?? ""
   },
   migrations: {
-    directory: "./db/migrations",
+    directory: "./src/db/migrations",
     extension: "ts"
   },
   seeds: {
-    directory: "./db/seeds",
+    directory: "./src/db/seeds",
     extension: "ts"
   }
 };

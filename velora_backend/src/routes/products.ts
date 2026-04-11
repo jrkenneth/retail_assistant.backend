@@ -1,5 +1,5 @@
 import { Router } from "express";
-import db from "../db.js";
+import db from "../db/knex.js";
 import { notFound } from "../errors.js";
 import { asyncHandler, paginate, parseInteger, parsePagination } from "../utils.js";
 
@@ -21,6 +21,9 @@ function buildProductsQuery() {
       "products.return_window_days",
       "products.is_promotion_eligible",
       "products.specifications",
+      "products.image_url",
+      "products.rating",
+      "products.review_count",
       "products.created_at",
       "products.updated_at",
       "product_categories.name as category_name",
@@ -34,10 +37,19 @@ router.get(
     const pagination = parsePagination(req.query as Record<string, unknown>);
     const category = typeof req.query.category === "string" ? req.query.category.trim() : "";
     const availabilityStatus =
-      typeof req.query.availability_status === "string" ? req.query.availability_status.trim() : "";
+      typeof req.query.availability === "string"
+        ? req.query.availability.trim()
+        : typeof req.query.availability_status === "string"
+          ? req.query.availability_status.trim()
+          : "";
     const promotionEligible =
       typeof req.query.is_promotion_eligible === "string" ? req.query.is_promotion_eligible.trim() : "";
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const search =
+      typeof req.query.query === "string"
+        ? req.query.query.trim()
+        : typeof req.query.search === "string"
+          ? req.query.search.trim()
+          : "";
     const minPrice = parseInteger(req.query.min_price, "min_price");
     const maxPrice = parseInteger(req.query.max_price, "max_price");
 

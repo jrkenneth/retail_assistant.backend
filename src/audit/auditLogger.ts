@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db/client.js";
 
 export type AuditEvent = {
-  employee_number: string;
-  full_name: string;
-  role: string;
-  event_type: "access_denied" | "scope_violation";
+  customer_id: string;
+  customer_email: string;
+  event_type: "access_denied" | "escalation_triggered" | "refusal_triggered" | "scope_violation";
   domain: string;
   intent: string;
   params_snapshot: Record<string, unknown>;
@@ -17,9 +16,8 @@ export async function logAuditEvent(event: AuditEvent): Promise<void> {
   try {
     await db("audit_log").insert({
       id: randomUUID(),
-      employee_number: event.employee_number,
-      full_name: event.full_name,
-      role: event.role,
+      customer_id: event.customer_id,
+      customer_email: event.customer_email,
       event_type: event.event_type,
       domain: event.domain,
       intent: event.intent,

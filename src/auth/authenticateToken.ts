@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { verifyAuthToken } from "./jwt.js";
 import { isBlacklisted } from "./tokenBlacklist.js";
+import type { AuthenticatedCustomer } from "./types.js";
 
 function extractBearerToken(headerValue?: string): string | null {
   if (!headerValue) {
@@ -29,19 +30,24 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    req.auth = claims;
-    req.user = {
+    const customer: AuthenticatedCustomer = {
+      customer_id: claims.customer_id,
       customer_number: claims.customer_number,
-      employee_number: claims.employee_number,
-      full_name: claims.full_name,
+      first_name: claims.first_name,
+      last_name: claims.last_name,
+      full_name: `${claims.first_name} ${claims.last_name}`.trim(),
       email: claims.email,
       account_status: claims.account_status,
       loyalty_points: claims.loyalty_points,
-      role: claims.role,
-      access_role: claims.access_role,
-      department: claims.department,
-      entity: claims.entity,
+      role: "Customer",
+      access_role: "customer",
+      department: "Customers",
+      entity: "Velora",
     };
+
+    req.auth = claims;
+    req.customer = customer;
+    req.user = customer;
     next();
   } catch {
     res.status(401).json({ error: "invalid_or_expired_token" });

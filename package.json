@@ -13,6 +13,9 @@
     "db:make": "knex migrate:make --knexfile knexfile.cjs",
     "db:seed": "knex seed:run --knexfile knexfile.cjs",
     "rag:embed": "tsx src/rag/generateEmbeddings.ts",
+    "eval:adapter": "tsx src/evaluation/runAdapterIntegration.ts",
+    "eval:rag": "tsx src/evaluation/runRagEvaluation.ts",
+    "eval:scenarios": "tsx src/evaluation/runScenarioEvaluation.ts",
     "lint": "echo \"backend lint not configured yet\"",
     "test": "npm run typecheck"
   },

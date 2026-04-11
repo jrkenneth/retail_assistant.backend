@@ -1,7 +1,7 @@
 import knex from "knex";
 import { env } from "../config.js";
 
-const connection = env.ECOMMERCE_DATABASE_URL ?? env.DATABASE_URL;
+const connection = env.VELORA_DATABASE_URL ?? env.DATABASE_URL;
 
 export const ragDb = knex({
   client: "pg",

@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { Router } from "express";
-import db from "../db.js";
+import db from "../db/knex.js";
 import { badRequest, unauthorized } from "../errors.js";
 import { asyncHandler } from "../utils.js";
 
@@ -32,6 +32,7 @@ router.post(
 
     const customer = await db("customers")
       .select(
+        "customers.id as customer_id",
         "customers.customer_number",
         "customers.first_name",
         "customers.last_name",

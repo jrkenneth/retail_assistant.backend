@@ -6,7 +6,7 @@ import { asyncRoute, sendNotFound } from "./routeUtils.js";
 export const artifactsRouter = Router();
 
 artifactsRouter.get("/", asyncRoute(async (req, res) => {
-  const rows = await listOwnedArtifacts(req.user!.employee_number, 200);
+  const rows = await listOwnedArtifacts(req.customer!.customer_number, 200);
   res.status(200).json({
     items: rows.map((row) => ({
       id: row.id,
@@ -24,7 +24,7 @@ artifactsRouter.get("/", asyncRoute(async (req, res) => {
 }));
 
 artifactsRouter.get("/:artifactId", asyncRoute(async (req, res) => {
-  const row = await getOwnedArtifactById(req.params.artifactId, req.user!.employee_number);
+  const row = await getOwnedArtifactById(req.params.artifactId, req.customer!.customer_number);
   if (!row) {
     sendNotFound(res, "artifact_not_found");
     return;
@@ -49,7 +49,7 @@ artifactsRouter.get("/:artifactId", asyncRoute(async (req, res) => {
 }));
 
 artifactsRouter.get("/:artifactId/preview", asyncRoute(async (req, res) => {
-  const row = await getOwnedArtifactById(req.params.artifactId, req.user!.employee_number);
+  const row = await getOwnedArtifactById(req.params.artifactId, req.customer!.customer_number);
   if (!row) {
     sendNotFound(res, "artifact_not_found");
     return;
@@ -63,7 +63,7 @@ artifactsRouter.get("/:artifactId/preview", asyncRoute(async (req, res) => {
 }));
 
 artifactsRouter.get("/:artifactId/download", asyncRoute(async (req, res) => {
-  const row = await getOwnedArtifactById(req.params.artifactId, req.user!.employee_number);
+  const row = await getOwnedArtifactById(req.params.artifactId, req.customer!.customer_number);
   if (!row) {
     sendNotFound(res, "artifact_not_found");
     return;

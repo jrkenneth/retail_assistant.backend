@@ -12,7 +12,7 @@ const makeReferenceNumber = () => {
 export const accessRequestsRouter = Router();
 
 accessRequestsRouter.get("/", asyncRoute(async (req, res) => {
-  const items = await listAccessRequestsByEmployee(req.user!.employee_number, 100);
+  const items = await listAccessRequestsByEmployee(req.customer!.customer_number, 100);
   res.status(200).json({ items });
 }));
 
@@ -28,8 +28,8 @@ accessRequestsRouter.post("/", asyncRoute(async (req, res) => {
   const row = await createAccessRequest({
     id: `access-${timestamp}`,
     referenceNumber: makeReferenceNumber(),
-    requestedBy: req.user!.employee_number,
-    requestedRole: req.user!.access_role,
+    requestedBy: req.customer!.customer_number,
+    requestedRole: req.customer!.access_role,
     resourceRequested: sanitized.resourceRequested,
     justification: sanitized.justification,
   });

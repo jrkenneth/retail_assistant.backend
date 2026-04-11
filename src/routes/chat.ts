@@ -105,11 +105,29 @@ async function processChatRequest(
     prompt_length: request.prompt.length,
   });
 
-  const existingSession = await getSessionById(request.session_id, user.employee_number);
+  const sessionOwner = user.customer_number;
+  const existingSession = await getSessionById(request.session_id, sessionOwner);
   if (!existingSession) {
-    await createSession(request.session_id, "New Chat", user.employee_number);
+    await createSession(request.session_id, "New Chat", sessionOwner);
+  } else if (existingSession.closed_at) {
+    return {
+      response_type: "text",
+      message: `This chat session is closed and read-only. Start a new chat to continue. Ref: ${correlationId}.`,
+      message_text: `This chat session is closed and read-only. Start a new chat to continue. Ref: ${correlationId}.`,
+      ui_actions: [],
+      citations: [],
+      tool_trace: [],
+      errors: [
+        {
+          reference_id: correlationId,
+          user_message: "This chat session is closed.",
+          what_i_tried: "I checked the active session state before sending your message.",
+          next_options: ["Create a new chat", "Review the existing conversation"],
+        },
+      ],
+    };
   }
-  const historyRows = await listMessagesByOwnedSession(request.session_id, user.employee_number, 12);
+  const historyRows = await listMessagesByOwnedSession(request.session_id, sessionOwner, 12);
   let historyMapped = historyRows.map((row) => ({
     role: row.role,
     text: row.message_text,
@@ -171,7 +189,7 @@ async function processChatRequest(
         attempts: trace.attempts,
       }),
     ),
-    touchSession(request.session_id, user.employee_number),
+    touchSession(request.session_id, sessionOwner),
   ]);
 
   logEvent("info", "chat.request.completed", correlationId, {
@@ -188,7 +206,7 @@ async function processChatRequest(
   if (shouldAutoRename) {
     const title = await generateSessionTitle(request.prompt, activeModes);
     if (title) {
-      await renameSession(request.session_id, title, user.employee_number);
+      await renameSession(request.session_id, title, sessionOwner);
       return { ...response, session_title: title };
     }
   }
@@ -199,7 +217,7 @@ async function processChatRequest(
 chatRouter.post("/", async (req, res) => {
   const correlationId = req.header("x-correlation-id") ?? makeReferenceId();
   try {
-    const response = await processChatRequest(req.body, correlationId, req.user!, undefined, req.ip);
+    const response = await processChatRequest(req.body, correlationId, req.customer!, undefined, req.ip);
     res.setHeader("x-reference-id", correlationId);
     res.status(200).json(response);
   } catch (error) {
@@ -233,7 +251,7 @@ chatRouter.post("/stream", async (req, res) => {
   };
 
   try {
-    const response = await processChatRequest(req.body, correlationId, req.user!, onStatus, req.ip);
+    const response = await processChatRequest(req.body, correlationId, req.customer!, onStatus, req.ip);
     const words = response.message_text.split(" ");
     for (let i = 0; i < words.length; i++) {
       const token = i === words.length - 1 ? words[i] : `${words[i]} `;

@@ -29,13 +29,13 @@ export async function listMessagesBySession(sessionId: string, limit = 200): Pro
 
 export async function listMessagesByOwnedSession(
   sessionId: string,
-  employeeNumber: string,
+  customerNumber: string,
   limit = 200,
 ): Promise<MessageRow[]> {
   return db<MessageRow>("chat_messages")
     .innerJoin("chat_sessions", "chat_messages.session_id", "chat_sessions.id")
     .where("chat_messages.session_id", sessionId)
-    .andWhere("chat_sessions.employee_number", employeeNumber)
+    .andWhere("chat_sessions.customer_number", customerNumber)
     .select("chat_messages.*")
     .orderBy("chat_messages.created_at", "asc")
     .limit(limit);

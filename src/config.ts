@@ -11,6 +11,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   LLM_PROVIDER: z.enum(["openai_compat", "google"]).default("openai_compat"),
   LLM_MODEL: z.string().default("MiniMaxAI/MiniMax-M2.5-TEE"),
+  CHUTES_API_KEY: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
   LLM_BASE_URL: z.string().default("https://llm.chutes.ai/v1/chat/completions"),
   GEMINI_API_KEY: z.string().optional(),
@@ -24,14 +25,22 @@ const envSchema = z.object({
   TAVILY_API_KEY: z.string().optional(),
   SEARCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
   SEARCH_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
-  ECOMMERCE_API_URL: z.string().default(process.env.VELORA_API_URL ?? process.env.ALETIA_API_URL ?? "http://localhost:4001"),
-  ECOMMERCE_API_KEY: z.string().default(process.env.VELORA_API_KEY ?? process.env.VELORA_API_KEY ?? ""),
-  ECOMMERCE_DATABASE_URL: z.string().url().optional(),
+  ECOMMERCE_API_URL: z.string().default(process.env.ECOMMERCE_API_URL ?? process.env.VELORA_API_URL ?? "http://localhost:4001"),
+  ECOMMERCE_API_KEY: z.string().default(process.env.VELORA_API_KEY ?? process.env.API_KEY ?? ""),
+  VELORA_DATABASE_URL: z.string().url().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
-  VELORA_API_URL: z.string().default(process.env.ALETIA_API_URL ?? "http://localhost:4001"),
-  VELORA_API_KEY: z.string().default(process.env.VELORA_API_KEY ?? ""),
-  ALETIA_API_URL: z.string().optional(),
-  VELORA_API_KEY: z.string().optional(),
+  EMBEDDING_BASE_URL: z.string().optional(),
+  EMBEDDING_API_KEY: z.string().optional(),
+  VELORA_API_URL: z.string().default(process.env.ECOMMERCE_API_URL ?? "http://localhost:4001"),
+  VELORA_API_KEY: z.string().default(process.env.ECOMMERCE_API_KEY ?? process.env.API_KEY ?? ""),
+  API_KEY: z.string().optional(),
 });
 
-export const env = envSchema.parse(process.env);
+const parsedEnv = envSchema.parse(process.env);
+
+export const env = {
+  ...parsedEnv,
+  LLM_API_KEY: parsedEnv.LLM_API_KEY ?? parsedEnv.CHUTES_API_KEY,
+  EMBEDDING_BASE_URL: parsedEnv.EMBEDDING_BASE_URL ?? parsedEnv.LLM_BASE_URL,
+  EMBEDDING_API_KEY: parsedEnv.EMBEDDING_API_KEY ?? parsedEnv.LLM_API_KEY ?? parsedEnv.CHUTES_API_KEY,
+};

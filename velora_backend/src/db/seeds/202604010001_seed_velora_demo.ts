@@ -15,6 +15,9 @@ type SeedProductRow = {
   return_window_days: number;
   is_promotion_eligible: boolean;
   specifications: Record<string, unknown>;
+  image_url: string | null;
+  rating: number | null;
+  review_count: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -84,6 +87,31 @@ export async function seed(knex: Knex): Promise<void> {
 
   await knex("product_categories").insert(categories);
   const categoryByName = Object.fromEntries(categories.map((category) => [category.name, category.id]));
+
+  // Per-product image, rating, and review count keyed by SKU.
+  // Images use picsum.photos with a deterministic seed so they are consistent across runs.
+  const productMeta: Record<string, { image_url: string; rating: number; review_count: number }> = {
+    "AUD-HMX-100": { image_url: "https://picsum.photos/seed/AUD-HMX-100/600/400", rating: 4.8, review_count: 2341 },
+    "AUD-SPH-210": { image_url: "https://picsum.photos/seed/AUD-SPH-210/600/400", rating: 4.5, review_count: 987 },
+    "AUD-BUD-330": { image_url: "https://picsum.photos/seed/AUD-BUD-330/600/400", rating: 4.3, review_count: 1204 },
+    "CMP-LAP-410": { image_url: "https://picsum.photos/seed/CMP-LAP-410/600/400", rating: 4.6, review_count: 543 },
+    "CMP-MON-255": { image_url: "https://picsum.photos/seed/CMP-MON-255/600/400", rating: 4.4, review_count: 318 },
+    "CMP-KEY-710": { image_url: "https://picsum.photos/seed/CMP-KEY-710/600/400", rating: 4.7, review_count: 892 },
+    "MOB-PHN-520": { image_url: "https://picsum.photos/seed/MOB-PHN-520/600/400", rating: 4.5, review_count: 1763 },
+    "MOB-TAB-610": { image_url: "https://picsum.photos/seed/MOB-TAB-610/600/400", rating: 4.2, review_count: 421 },
+    "MOB-POW-115": { image_url: "https://picsum.photos/seed/MOB-POW-115/600/400", rating: 4.6, review_count: 2108 },
+    "SMH-CAM-140": { image_url: "https://picsum.photos/seed/SMH-CAM-140/600/400", rating: 4.4, review_count: 674 },
+    "SMH-LGT-220": { image_url: "https://picsum.photos/seed/SMH-LGT-220/600/400", rating: 4.3, review_count: 289 },
+    "SMH-THM-305": { image_url: "https://picsum.photos/seed/SMH-THM-305/600/400", rating: 4.5, review_count: 156 },
+    "WRB-WTC-410": { image_url: "https://picsum.photos/seed/WRB-WTC-410/600/400", rating: 4.6, review_count: 1432 },
+    "WRB-RNG-150": { image_url: "https://picsum.photos/seed/WRB-RNG-150/600/400", rating: 4.4, review_count: 378 },
+    "WRB-BND-205": { image_url: "https://picsum.photos/seed/WRB-BND-205/600/400", rating: 4.1, review_count: 612 },
+    "LIF-SNK-901": { image_url: "https://picsum.photos/seed/LIF-SNK-901/600/400", rating: 4.3, review_count: 847 },
+    "LIF-BAG-305": { image_url: "https://picsum.photos/seed/LIF-BAG-305/600/400", rating: 4.5, review_count: 503 },
+    "LIF-MUG-110": { image_url: "https://picsum.photos/seed/LIF-MUG-110/600/400", rating: 4.7, review_count: 1921 },
+    "LIF-DSK-420": { image_url: "https://picsum.photos/seed/LIF-DSK-420/600/400", rating: 4.4, review_count: 264 },
+    "CMP-MSE-530": { image_url: "https://picsum.photos/seed/CMP-MSE-530/600/400", rating: 4.5, review_count: 731 },
+  };
 
   const products: SeedProductRow[] = [
     {
@@ -460,6 +488,9 @@ export async function seed(knex: Knex): Promise<void> {
     return_window_days: product.return_window_days,
     is_promotion_eligible: product.is_promotion_eligible,
     specifications: product.specifications,
+    image_url: productMeta[product.sku]?.image_url ?? null,
+    rating: productMeta[product.sku]?.rating ?? null,
+    review_count: productMeta[product.sku]?.review_count ?? null,
     created_at: "2026-04-01T08:10:00.000Z",
     updated_at: "2026-04-01T08:10:00.000Z",
   }));

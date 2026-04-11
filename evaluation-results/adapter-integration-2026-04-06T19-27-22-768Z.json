@@ -1,0 +1,384 @@
+{
+  "suite": "adapter_integration",
+  "intents_tested": 15,
+  "checks_run": 75,
+  "passed": 75,
+  "failed": 0,
+  "results": [
+    {
+      "intent": "authenticate_customer",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "authenticate_customer",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "authenticate_customer",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "authenticate_customer",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "authenticate_customer",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "validate_customer_status",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "validate_customer_status",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "validate_customer_status",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "validate_customer_status",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "validate_customer_status",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_customer_profile",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_customer_profile",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_customer_profile",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_customer_profile",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_customer_profile",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_order_history",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_order_history",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_order_history",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_order_history",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_order_history",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_order_detail",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_order_detail",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_order_detail",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_order_detail",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_order_detail",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "track_order",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "track_order",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "track_order",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "track_order",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "track_order",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_order_items",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_order_items",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_order_items",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_order_items",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_order_items",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "initiate_return",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "initiate_return",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "initiate_return",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "initiate_return",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "initiate_return",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_return_status",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_return_status",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_return_status",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_return_status",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_return_status",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_balance",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_balance",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_balance",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_balance",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_balance",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_history",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_history",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_history",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_history",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_loyalty_history",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "search_products",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "search_products",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "search_products",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "search_products",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "search_products",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_product_detail",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_product_detail",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_product_detail",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_product_detail",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_product_detail",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "create_support_ticket",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "create_support_ticket",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "create_support_ticket",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "create_support_ticket",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "create_support_ticket",
+      "scenario": "timeout",
+      "passed": true
+    },
+    {
+      "intent": "get_support_ticket",
+      "scenario": "success",
+      "passed": true
+    },
+    {
+      "intent": "get_support_ticket",
+      "scenario": "404",
+      "passed": true
+    },
+    {
+      "intent": "get_support_ticket",
+      "scenario": "malformed",
+      "passed": true
+    },
+    {
+      "intent": "get_support_ticket",
+      "scenario": "401",
+      "passed": true
+    },
+    {
+      "intent": "get_support_ticket",
+      "scenario": "timeout",
+      "passed": true
+    }
+  ]
+}

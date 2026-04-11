@@ -75,23 +75,23 @@ export async function listArtifactsBySession(sessionId: string): Promise<Pick<Ar
 
 export async function getOwnedArtifactById(
   id: string,
-  employeeNumber: string,
+  customerNumber: string,
 ): Promise<ArtifactRow | undefined> {
   return db<ArtifactRow>("artifacts")
     .innerJoin("chat_sessions", "artifacts.session_id", "chat_sessions.id")
     .where("artifacts.id", id)
-    .andWhere("chat_sessions.employee_number", employeeNumber)
+    .andWhere("chat_sessions.customer_number", customerNumber)
     .select("artifacts.*")
     .first();
 }
 
 export async function listOwnedArtifacts(
-  employeeNumber: string,
+  customerNumber: string,
   limit = 200,
 ): Promise<ArtifactRow[]> {
   return db<ArtifactRow>("artifacts")
     .innerJoin("chat_sessions", "artifacts.session_id", "chat_sessions.id")
-    .where("chat_sessions.employee_number", employeeNumber)
+    .where("chat_sessions.customer_number", customerNumber)
     .select("artifacts.*")
     .orderBy("artifacts.created_at", "desc")
     .limit(limit);
@@ -99,11 +99,11 @@ export async function listOwnedArtifacts(
 
 export async function listArtifactsByOwnedSession(
   sessionId: string,
-  employeeNumber: string,
+  customerNumber: string,
 ): Promise<Pick<ArtifactRow, "id" | "file_path">[]> {
   return db<ArtifactRow>("artifacts")
     .innerJoin("chat_sessions", "artifacts.session_id", "chat_sessions.id")
     .where("artifacts.session_id", sessionId)
-    .andWhere("chat_sessions.employee_number", employeeNumber)
+    .andWhere("chat_sessions.customer_number", customerNumber)
     .select("artifacts.id", "artifacts.file_path");
 }

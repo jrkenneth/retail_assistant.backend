@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import db from "../db.js";
+import db from "../db/knex.js";
 import { badRequest, notFound } from "../errors.js";
 import { asyncHandler, paginate, parseInteger, parsePagination } from "../utils.js";
 

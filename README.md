@@ -10,7 +10,7 @@ Express + TypeScript API for Lena. This service is the source of truth for authe
 - Persists chat sessions, messages, tool traces, artifacts, access requests, and audit events in PostgreSQL
 - Runs the LLM-driven orchestration loop for chat requests
 - Executes controlled tools instead of letting the model access data directly
-- Applies deterministic server-side RBAC before any HR data reaches the model
+- Applies deterministic server-side RBAC before any retail data reaches the model
 - Streams assistant responses to the frontend
 - Generates and serves document artifacts
 - Supports session-scoped model thinking mode for Qwen via the OpenAI-compatible API path
@@ -47,7 +47,7 @@ This design keeps the LLM useful for reasoning and phrasing, but not authoritati
 ```text
 src/
   accessRequests/    Access-request sanitization helpers
-  adapters/aletia/   Legacy adapter path to be replaced with Velora ecommerce integration
+  adapters/ecommerce/ Ecommerce adapter for the external demo backend
   agent/             Router, planner, system prompt, tool registry, model client
   artifacts/         Artifact generation and content types
   audit/             Audit logger
@@ -135,8 +135,8 @@ TAVILY_API_KEY=
 SEARCH_TIMEOUT_MS=8000
 SEARCH_MAX_RESULTS=5
 
-ALETIA_API_URL=http://localhost:4001
-VELORA_API_KEY=velora-demo-key-2024
+ECOMMERCE_API_URL=http://localhost:4001
+ECOMMERCE_API_KEY=velora-demo-key-2024
 ```
 
 ## Run Locally
@@ -208,7 +208,7 @@ Authenticated routes:
 - Login is rate-limited
 - Logout revokes the current token via `jti` blacklist
 - Protected routes require a valid, non-revoked token
-- Chat sessions and attached data are scoped to the authenticated employee
+- Chat sessions and attached data are scoped to the authenticated customer
 
 ## RBAC Model
 
@@ -216,10 +216,10 @@ RBAC is enforced inside the `execute_query` tool, not just by prompts.
 
 The backend currently applies:
 
-- role mapping from business identity to `employee`, `manager`, `hr_officer`, `finance_officer`, or `admin`
+- customer-scoped access enforcement for the authenticated Velora account
 - stale identity-status revalidation through the Velora service on each tool execution
-- intent allow-lists by role
-- unconditional scope overrides for self-service, employee, and manager paths
+- intent allow-lists for Lena's retail tools
+- unconditional customer-number overrides on protected retail intents
 - post-query ownership/scope validation
 - field-level sanitization before the LLM sees the result
 
@@ -227,15 +227,16 @@ This ensures that the model cannot bypass data scope rules by hallucinating para
 
 ## Self-Service Rule
 
-The backend currently includes an explicit self-service rule for selected intents such as:
+The backend includes explicit customer self-service protection for retail intents such as:
 
-- employee summary/profile
-- leave balance
-- leave history
-- own payroll
-- employment history
+- customer profile lookup
+- order history and order detail
+- order tracking and order items
+- returns and return status
+- support ticket lookup and creation
+- loyalty balance and loyalty history
 
-For those intents, the backend forcibly scopes `employee_number` to the logged-in user before the query runs and validates the returned data afterward.
+For those intents, the backend forcibly scopes `customer_number` to the logged-in customer before the query runs and validates the returned data afterward.
 
 ## Access Requests
 

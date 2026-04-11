@@ -5,7 +5,7 @@ const router = Router();
 router.get("/", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
-    service: "Velora Backend",
+    service: "Ecommerce Demo Backend",
     timestamp: new Date().toISOString()
   });
 });

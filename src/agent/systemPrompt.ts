@@ -29,7 +29,7 @@ function buildCustomerContextSection(user?: AuthenticatedUser): string {
     return "";
   }
 
-  const firstName = user.full_name.split(" ")[0] || user.full_name;
+  const firstName = user.first_name || user.full_name.split(" ")[0] || user.full_name;
   return [
     "CURRENT CUSTOMER CONTEXT",
     `Customer first name: ${firstName}`,
@@ -117,7 +117,7 @@ Return exactly one JSON object and nothing else.
   {"intent":"string","action":{"type":"call_skill","skill":"product_enquiry_skill","rationale":"optional"}}
 
 - call tool:
-  {"intent":"string","action":{"type":"call_tool","tool":"execute_query","tool_input":{"domain":"commerce","intent":"query_products","params":{},"filters":{}},"rationale":"optional"}}
+  {"intent":"string","action":{"type":"call_tool","tool":"execute_query","tool_input":{"domain":"commerce","intent":"search_products","params":{},"filters":{"query":"Premium Wireless Headphones Model X"}},"rationale":"optional"}}
 
 - respond:
   {"intent":"string","action":{"type":"respond","response_type":"text|product_card|order_card|escalation|refusal|loyalty_card","message_text":"string","confidence_score":0.0,"payload":{},"policy_citations":[{"policy_title":"...","excerpt":"..."}],"quick_actions":[{"label":"...","prompt":"..."}],"ui_actions":[],"summary":"optional","follow_up":"optional","show_sources":"optional boolean"}}
@@ -136,7 +136,7 @@ For action.type="respond":
 - Use "refusal" when policy blocks the requested outcome.
 - Use "loyalty_card" when presenting loyalty balance/history.
 - payload must match the response_type.
-  - product_card payload: {sku,name,price,original_price?,availability_status,is_promotion_eligible,warranty_duration,return_window_days,specifications,rating?,review_count?}
+  - product_card payload: {sku,name,price,original_price?,availability_status,is_promotion_eligible,warranty_duration,return_window_days,specifications,image_url?,rating?,review_count?}
   - order_card payload: {order_number,order_date,status,delivery_status,tracking_number?,estimated_delivery_date?,refund_status?,items:[{name,quantity,unit_price}],can_initiate_return}
   - escalation payload: {ticket_number,estimated_wait_minutes,queue_position,case_summary,actions_completed:[{label,detail}]}
   - refusal payload: {reason,policy_title,policy_bullets,order_context?}

@@ -1,6 +1,8 @@
-export interface AuthenticatedUser {
+export interface AuthenticatedCustomer {
+  customer_id: string;
   customer_number: string;
-  employee_number: string;
+  first_name: string;
+  last_name: string;
   full_name: string;
   email: string;
   account_status: string;
@@ -11,7 +13,16 @@ export interface AuthenticatedUser {
   entity: string;
 }
 
-export interface AuthTokenClaims extends AuthenticatedUser {
+export type AuthenticatedUser = AuthenticatedCustomer;
+
+export interface AuthTokenClaims {
+  customer_id: string;
+  customer_number: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  loyalty_points: number;
+  account_status: string;
   jti: string;
   exp: number;
   iat: number;
