@@ -1,96 +1,41 @@
-# Backend
+# Backend (Lena API)
 
-Express + TypeScript API for Lena. This service is the source of truth for authentication, chat orchestration, RBAC, session ownership, artifact generation, access requests, and audit-safe tool execution.
+Express + TypeScript backend for Lena. This service handles authentication, chat orchestration, RBAC enforcement, tool execution, persistence, artifacts, and audit logging.
 
-## What This Service Does
+## Role in the System
 
-- Authenticates users against the Velora backend and issues JWTs
-- Enforces login rate limiting and token revocation checks
-- Protects all business routes with JWT middleware
-- Persists chat sessions, messages, tool traces, artifacts, access requests, and audit events in PostgreSQL
-- Runs the LLM-driven orchestration loop for chat requests
-- Executes controlled tools instead of letting the model access data directly
-- Applies deterministic server-side RBAC before any retail data reaches the model
-- Streams assistant responses to the frontend
-- Generates and serves document artifacts
-- Supports session-scoped model thinking mode for Qwen via the OpenAI-compatible API path
-
-## Architecture Summary
-
-The backend is intentionally policy-first:
-
-1. The frontend sends an authenticated request.
-2. Express validates auth and route ownership.
-3. The chat route validates the request body with Zod.
-4. The agent loop routes the request, activates skills, plans next actions, and may call tools.
-5. The `execute_query` tool enforces deterministic RBAC, scope overrides, post-query validation, and field-level sanitization.
-6. The final assistant response, traces, and optional artifacts are stored.
-7. The API returns JSON or NDJSON events back to the frontend.
-
-This design keeps the LLM useful for reasoning and phrasing, but not authoritative for security or data governance.
-
-## Current Feature Areas
-
-- Health endpoints
-- Authentication and JWT session management
-- Session-scoped chat history
-- Streaming chat responses
-- Tool-based data querying through the Velora adapter path
-- Deterministic RBAC and self-service access rules
-- Access denied escalation to access requests
-- Artifact generation and preview/download support
-- Audit logging for access-denied and scope-violation events
-- Qwen thinking toggle support through request-scoped model options
-
-## Project Structure
-
-```text
-src/
-  accessRequests/    Access-request sanitization helpers
-  adapters/ecommerce/ Ecommerce adapter for the external demo backend
-  agent/             Router, planner, system prompt, tool registry, model client
-  artifacts/         Artifact generation and content types
-  audit/             Audit logger
-  auth/              JWT signing, verification, blacklist, middleware
-  chat/              Request/response contracts, runtime policy, logging
-  db/                Knex client and repositories
-  rbac/              Role mapping and field/intent policy
-  routes/            Express route handlers
-  tools/             Tool implementations used by the agent
-  types/             Global typing extensions such as Express request typings
-
-migrations/          PostgreSQL schema migrations
-storage/exports/     Generated artifact files
-```
-
-## Key Technologies
-
-- Node.js
-- Express
-- TypeScript
-- Zod
-- Knex
-- PostgreSQL
-- LangChain
-- OpenAI-compatible chat API integration
-- Optional Google model support via LangChain
-
-## Why These Technologies
-
-- Express: simple, explicit request pipeline and middleware model
-- TypeScript: safer orchestration logic and route contracts
-- Zod: runtime validation for request and response shapes
-- Knex + PostgreSQL: clear schema control and migration support
-- LangChain: pragmatic orchestration wrapper without giving up server-side control
-- OpenAI-compatible transport: flexibility to target Qwen and similar providers without rewriting the model layer
+- Authenticates users and issues JWTs.
+- Owns chat sessions/messages and request traces.
+- Runs the LLM planner/agent loop.
+- Executes tools with deterministic guardrails (instead of direct model data access).
+- Enforces customer scope and field-level RBAC before returning data.
+- Serves artifact metadata, preview, and download endpoints.
+- Stores access requests and audit events.
 
 ## Prerequisites
 
 - Node.js 18+
-- PostgreSQL running locally or reachable from `DATABASE_URL`
-- Velora backend running locally, typically on `http://localhost:4001`
-- A configured LLM provider
-- Optional Tavily credentials if web research is enabled
+- PostgreSQL (local or remote)
+- Velora demo backend running (default: `http://localhost:4001`)
+- LLM credentials (OpenAI-compatible or Google)
+- Optional Tavily API key for research mode web search
+
+## Environment Setup
+
+1. Copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+2. Update required secrets and connection strings in `.env`.
+
+Minimum required to boot reliably:
+
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `LLM_PROVIDER`, `LLM_MODEL`, and provider API key
+- `VELORA_API_URL` and `VELORA_API_KEY`
 
 ## Install
 
@@ -98,45 +43,26 @@ storage/exports/     Generated artifact files
 npm install
 ```
 
-## Environment Setup
+## Database Setup
 
-Create a local env file:
+Run migrations before starting the API:
 
 ```bash
-copy .env.example .env
+npm run db:migrate
 ```
 
-Important variables include:
+Optional commands:
 
 ```bash
-DATABASE_URL=
-NODE_ENV=development
-PORT=4000
-CORS_ORIGIN=http://localhost:5173
-JWT_SECRET=replace-me-with-a-long-random-secret
+npm run db:seed
+npm run db:rollback
+npm run db:make your_migration_name
+```
 
-LLM_PROVIDER=openai_compat
-LLM_MODEL=Qwen/Qwen3-32B-TEE
-LLM_API_KEY=
-LLM_BASE_URL=https://llm.chutes.ai/v1/chat/completions
+If you are using policy retrieval, generate embeddings after migrations/seeds:
 
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3-flash-preview
-
-LANGCHAIN_API_KEY=
-LANGCHAIN_PROJECT=copilot project
-LANGCHAIN_TRACING_V2=true
-
-AGENT_MAX_TOOL_CALLS=4
-AGENT_MAX_PLANNING_ITERATIONS=2
-
-SEARCH_PROVIDER=tavily
-TAVILY_API_KEY=
-SEARCH_TIMEOUT_MS=8000
-SEARCH_MAX_RESULTS=5
-
-ECOMMERCE_API_URL=http://localhost:4001
-ECOMMERCE_API_KEY=velora-demo-key-2024
+```bash
+npm run rag:embed
 ```
 
 ## Run Locally
@@ -158,32 +84,29 @@ npm run build
 npm run start
 ```
 
-## Database Commands
+## Scripts
 
-```bash
-npm run db:migrate
-npm run db:rollback
-npm run db:make your_migration_name
-```
+- `npm run dev` - Run API with live reload
+- `npm run typecheck` - TypeScript check
+- `npm run build` - Typecheck build step
+- `npm run start` - Start API
+- `npm run db:migrate` - Apply migrations
+- `npm run db:rollback` - Rollback latest migration batch
+- `npm run db:seed` - Run seed scripts
+- `npm run rag:embed` - Build/update policy embeddings
+- `npm run eval:adapter` - Adapter integration evaluation
+- `npm run eval:rag` - RAG evaluation
+- `npm run eval:scenarios` - End-to-end scenario evaluation
 
-Current schema areas include:
+## Key API Endpoints
 
-- chat sessions
-- chat messages
-- request traces
-- artifacts
-- access requests
-- audit log
-
-## API Overview
-
-Public routes:
+Public:
 
 - `GET /health`
 - `GET /health/db`
 - `POST /api/auth/login`
 
-Authenticated routes:
+Authenticated:
 
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
@@ -201,108 +124,36 @@ Authenticated routes:
 - `GET /access-requests`
 - `POST /access-requests`
 
-## Authentication and Session Model
+## Project Structure
 
-- Users log in with Velora-backed credentials
-- Lena issues a JWT carrying identity and mapped access role
-- Login is rate-limited
-- Logout revokes the current token via `jti` blacklist
-- Protected routes require a valid, non-revoked token
-- Chat sessions and attached data are scoped to the authenticated customer
+```text
+src/
+  accessRequests/      Access request sanitization
+  adapters/ecommerce/  Velora API adapter
+  agent/               Routing, planning, prompts, skills, tool registry
+  artifacts/           Artifact generation and typing
+  audit/               Audit event logging
+  auth/                JWT and auth middleware
+  chat/                Contracts, runtime policy, logging
+  db/                  Knex client and repositories
+  rbac/                Role and field-level policy
+  routes/              Express route handlers
+  tools/               Tool implementations
+  types/               Shared typings
 
-## RBAC Model
-
-RBAC is enforced inside the `execute_query` tool, not just by prompts.
-
-The backend currently applies:
-
-- customer-scoped access enforcement for the authenticated Velora account
-- stale identity-status revalidation through the Velora service on each tool execution
-- intent allow-lists for Lena's retail tools
-- unconditional customer-number overrides on protected retail intents
-- post-query ownership/scope validation
-- field-level sanitization before the LLM sees the result
-
-This ensures that the model cannot bypass data scope rules by hallucinating parameters or asking for hidden fields.
-
-## Self-Service Rule
-
-The backend includes explicit customer self-service protection for retail intents such as:
-
-- customer profile lookup
-- order history and order detail
-- order tracking and order items
-- returns and return status
-- support ticket lookup and creation
-- loyalty balance and loyalty history
-
-For those intents, the backend forcibly scopes `customer_number` to the logged-in customer before the query runs and validates the returned data afterward.
-
-## Access Requests
-
-When RBAC blocks access, the frontend can raise an access request.
-
-The backend:
-
-- sanitizes request text
-- stores the request in PostgreSQL
-- exposes history only to the owning authenticated user
-
-## Audit Logging
-
-The backend logs operational security events such as:
-
-- access denied decisions
-- scope violations where LLM-supplied values were overridden
-
-Audit data is server-managed and not exposed through agent tools.
-
-## Model and Thinking Toggle
-
-For OpenAI-compatible Qwen usage, the backend supports request-scoped thinking mode.
-
-The chat request can pass `context.modes.thinking`, and the backend applies that consistently across:
-
-- capability routing
-- planner/final response generation
-- automatic session title generation
-
-For the Qwen OpenAI-compatible path, the backend sends:
-
-- `chat_template_kwargs.enable_thinking = true|false`
-
-It also adjusts sampling defaults to suit thinking vs non-thinking mode.
-
-## Artifacts
-
-Generated files are written under `storage/exports/`.
-
-The backend can:
-
-- persist artifact metadata
-- serve preview HTML where available
-- serve downloads
-- clean up artifacts when owning sessions are deleted
-
-## Testing
-
-```bash
-npm run test
+migrations/            Database migrations
+seeds/                 Database seeds
+storage/exports/       Generated artifact files
 ```
 
-Current test command runs TypeScript typechecking.
-
-## Typical Local Workflow
+## Recommended Local Startup Order
 
 1. Start PostgreSQL.
-2. Start the Velora backend.
-3. Run `npm run db:migrate`.
-4. Start the Lena backend with `npm run dev`.
-5. Start the frontend from the `frontend/` folder.
-6. Log in with a seeded user.
-7. Create a session and send prompts.
-8. Verify access-denied, access-request, artifact, or thinking-toggle behavior as needed.
+2. Start Velora backend from `backend/velora_backend`.
+3. In this folder, run `npm run db:migrate`.
+4. Start this backend with `npm run dev`.
+5. Start frontend from `frontend`.
 
-## Related Docs
+## Related Documentation
 
-- [velora_backend/API_DOCUMENTATION.md](./velora_backend/API_DOCUMENTATION.md) for the simulated external backend details
+- `velora_backend/API_DOCUMENTATION.md`

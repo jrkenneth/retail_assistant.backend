@@ -61,16 +61,16 @@ export const quickActionSchema = z.object({
 export const productCardPayloadSchema = z.object({
   sku: z.string().min(1),
   name: z.string().min(1),
-  price: z.number(),
-  original_price: z.number().optional(),
+  price: z.coerce.number(),
+  original_price: z.coerce.number().optional(),
   availability_status: z.string().min(1),
   is_promotion_eligible: z.boolean(),
   warranty_duration: z.string().min(1),
-  return_window_days: z.number().int().nonnegative(),
+  return_window_days: z.coerce.number().int().nonnegative(),
   specifications: z.record(z.string()),
   image_url: z.string().optional(),
-  rating: z.number().optional(),
-  review_count: z.number().int().optional(),
+  rating: z.coerce.number().optional(),
+  review_count: z.coerce.number().int().optional(),
 });
 
 export const orderItemPayloadSchema = z.object({
@@ -105,6 +105,7 @@ export const escalationPayloadSchema = z.object({
 });
 
 export const refusalPayloadSchema = z.object({
+  reason_code: z.string().min(1).optional(),
   reason: z.string().min(1),
   policy_title: z.string().min(1),
   policy_bullets: z.array(z.string().min(1)),

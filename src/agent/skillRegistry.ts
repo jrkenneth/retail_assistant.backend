@@ -83,7 +83,8 @@ Specialist skills you can load when needed:
     instructions: `
 Use this skill for product discovery and product explanation tasks.
 - Prefer search_products when the customer gives a product name, category, feature, or shopping intent.
-- Use get_product_detail when a SKU is known or a single clear product match has already been found.
+- Use get_product_detail only when you already have a confirmed SKU from a prior search_products result. Always pass the SKU in params: { sku: "<value>" }. Never call get_product_detail without a sku in params.
+- If no SKU is available yet, call search_products first, extract the sku field from the result, then call get_product_detail.
 - Present products in a concise, shopping-friendly way: name, price, promotion status, availability, warranty, return window, and the most relevant specs.
 - When comparing products, focus on concrete differences supported by tool data. Do not invent ratings or features.
 `.trim(),
@@ -93,7 +94,9 @@ Use this skill for product discovery and product explanation tasks.
     description: "Handle order history, order detail, and delivery/tracking questions.",
     instructions: `
 Use this skill for order tracking and delivery support.
-- For a tracking or order-number request, check the specific order first.
+- For any request that includes an order number, call execute_query with intent "get_order_detail" and params: { order_number: "<value>" }. This returns the full record including order date, items, and tracking status. Do NOT use "track_order" for order-number lookups — it returns incomplete data that cannot build an order card.
+- Use "track_order" only when you need to verify a live tracking number without building a full order card.
+- For "show my orders" or order history requests, call execute_query with intent "get_order_history".
 - Explain delivery statuses in plain language.
 - If tracking shows a delivery problem, summarize what is known and suggest the next safe step, including escalation when appropriate.
 - When the tool returns order items, use them to build a clear order summary rather than dumping raw fields.
@@ -106,6 +109,8 @@ Use this skill for order tracking and delivery support.
 Use this skill for returns and refund questions.
 - Verify return eligibility using actual order/return data and policy text when needed.
 - The core returns policy is: returns must be initiated within 30 days of the delivery date, items must be in original packaging, and qualifying refunds go to the original payment method.
+- If the customer gives an order number but not a return number, first query the return records by order number to find an existing return before calling any return-status endpoint.
+- Use get_return_status only when you already have a confirmed return_number.
 - Do not approve or promise exceptions unless policy-backed evidence is available.
 - If the customer is outside policy, explain the reason clearly and offer escalation where appropriate.
 `.trim(),
@@ -141,7 +146,10 @@ Trigger escalation when:
 - the issue is emotionally sensitive,
 - the complaint remains unresolved after repeated attempts,
 - or the customer explicitly asks for a human.
-When escalating, summarize the issue, what has already been checked, and the next expected step.
+Escalation steps (follow in order):
+1. Call execute_query with intent "create_support_ticket" to generate a real ticket. Include customer_number (injected automatically), a short subject, a description of the issue, and priority ("high" for urgent requests). Never invent a ticket_number — it must come from the tool response.
+2. Use the ticket_number, estimated_wait_minutes, and queue_position from the tool response to populate the escalation payload exactly.
+3. Respond with response_type "escalation" using the real ticket data.
 `.trim(),
   },
   governance_skill: {

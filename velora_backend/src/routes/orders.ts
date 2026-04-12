@@ -118,6 +118,7 @@ router.get(
     res.status(200).json({
       data: {
         order_number: order.order_number,
+        customer_number: order.customer_number,
         tracking_number: order.tracking_number,
         status: order.status,
         delivery_status: order.delivery_status,

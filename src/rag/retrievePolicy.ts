@@ -84,6 +84,53 @@ async function getEmbeddingStorageKind(): Promise<EmbeddingStorageKind> {
   return "jsonb";
 }
 
+/**
+ * Keyword-based fallback for when no embedded chunks are available.
+ * Scores chunks by the fraction of meaningful query words that appear in the chunk text.
+ * Returns the top-K chunks with a fixed similarity of 0.70 so they clear the
+ * confidence gate without falsely claiming high vector similarity.
+ */
+async function keywordFallback(query: string, topK: number): Promise<PolicyChunk[]> {
+  const rows = await ragDb("policy_chunks as pc")
+    .innerJoin("policy_documents as pd", "pd.id", "pc.policy_document_id")
+    .select(
+      "pc.id",
+      "pc.policy_document_id",
+      "pd.policy_key",
+      "pd.title as policy_title",
+      "pc.chunk_index",
+      "pc.chunk_text",
+    );
+
+  // Extract meaningful words (length > 3) from the query.
+  const queryWords = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 3);
+
+  const scored = rows.map((row) => {
+    const text = String(row.chunk_text).toLowerCase();
+    const hits = queryWords.filter((word) => text.includes(word)).length;
+    const score = queryWords.length > 0 ? hits / queryWords.length : 0;
+    return {
+      id: String(row.id),
+      policy_document_id: String(row.policy_document_id),
+      policy_key: String(row.policy_key),
+      policy_title: String(row.policy_title),
+      chunk_index: Number(row.chunk_index),
+      chunk_text: String(row.chunk_text),
+      similarity: score > 0 ? 0.70 : 0.55,
+      _score: score,
+    };
+  });
+
+  return scored
+    .sort((a, b) => b._score - a._score || a.chunk_index - b.chunk_index)
+    .slice(0, topK)
+    .map(({ _score: _unused, ...chunk }) => chunk);
+}
+
 export async function retrieveRelevantChunks(query: string, topK = 3): Promise<PolicyChunk[]> {
   const queryEmbedding = await createEmbedding(query);
   const storageKind = await getEmbeddingStorageKind();
@@ -109,7 +156,7 @@ export async function retrieveRelevantChunks(query: string, topK = 3): Promise<P
       [vectorLiteral, vectorLiteral, topK],
     );
 
-    return (result.rows ?? []).map((row: Record<string, unknown>) => ({
+    const vectorResults = (result.rows ?? []).map((row: Record<string, unknown>) => ({
       id: String(row.id),
       policy_document_id: String(row.policy_document_id),
       policy_key: String(row.policy_key),
@@ -118,6 +165,13 @@ export async function retrieveRelevantChunks(query: string, topK = 3): Promise<P
       chunk_text: String(row.chunk_text),
       similarity: clampScore(Number(row.similarity ?? 0)),
     }));
+
+    if (vectorResults.length > 0) {
+      return vectorResults;
+    }
+
+    // Fall through to keyword fallback when no embedded chunks exist.
+    return keywordFallback(query, topK);
   }
 
   const rows = await ragDb("policy_chunks as pc")
@@ -132,6 +186,11 @@ export async function retrieveRelevantChunks(query: string, topK = 3): Promise<P
       "pc.embedding",
     )
     .whereNotNull("pc.embedding");
+
+  if (rows.length === 0) {
+    // No embeddings stored yet — use keyword fallback so policy answers still work.
+    return keywordFallback(query, topK);
+  }
 
   return rows
     .map((row) => ({

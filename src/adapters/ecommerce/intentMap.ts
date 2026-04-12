@@ -138,6 +138,7 @@ const EXACT_INTENT_MAP: Record<string, EcommerceIntentEntry> = {
 
 export const ECOMMERCE_INTENT_MAP: Record<string, EcommerceIntentEntry> = {
   ...EXACT_INTENT_MAP,
+  get_order_details: EXACT_INTENT_MAP.get_order_detail,
   query_products: EXACT_INTENT_MAP.search_products,
   query_orders: EXACT_INTENT_MAP.get_order_history,
   query_returns: {
@@ -162,7 +163,20 @@ export const ECOMMERCE_INTENT_MAP: Record<string, EcommerceIntentEntry> = {
     }),
   },
   get_loyalty_summary: EXACT_INTENT_MAP.get_loyalty_balance,
+  get_loyalty_transactions: EXACT_INTENT_MAP.get_loyalty_history,
+  query_loyalty_transactions: EXACT_INTENT_MAP.get_loyalty_history,
+  get_loyalty_activity: EXACT_INTENT_MAP.get_loyalty_history,
+  query_loyalty_activity: EXACT_INTENT_MAP.get_loyalty_history,
   get_return_detail: EXACT_INTENT_MAP.get_return_status,
+  retrieve_policy: {
+    method: "GET",
+    buildPath: () => "/api/v1/policies",
+    buildQuery: (filters) => ({
+      ...(filters.policy_key && { policy_key: filters.policy_key }),
+      ...(filters.search && { search: filters.search }),
+      ...withLimit(filters),
+    }),
+  },
   query_policy_documents: {
     method: "GET",
     buildPath: () => "/api/v1/policies",

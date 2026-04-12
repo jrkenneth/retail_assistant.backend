@@ -20,7 +20,7 @@ import {
   specialistSkillSummaryLines,
   type SpecialistSkillName,
 } from "./skillRegistry.js";
-import { toolDescriptions, type ToolName } from "./toolRegistry.js";
+import { toolDescriptions, toolPlannerGuides, type ToolName } from "./toolRegistry.js";
 import type {
   AgentAction,
   AgentToolInput,
@@ -54,9 +54,60 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function extractSearchQuery(toolInput: unknown): string {
+  if (typeof toolInput === "string") {
+    return toolInput.trim();
+  }
+
+  if (!isPlainObject(toolInput)) {
+    return "";
+  }
+
+  const direct = asString(toolInput.query);
+  if (direct) {
+    return direct;
+  }
+
+  if (isPlainObject(toolInput.params)) {
+    const paramsQuery = asString(toolInput.params.query);
+    if (paramsQuery) {
+      return paramsQuery;
+    }
+  }
+
+  if (isPlainObject(toolInput.filters)) {
+    const filtersQuery = asString(toolInput.filters.query);
+    if (filtersQuery) {
+      return filtersQuery;
+    }
+  }
+
+  return "";
+}
+
+function extractTopK(toolInput: unknown): number | undefined {
+  if (!isPlainObject(toolInput)) {
+    return undefined;
+  }
+
+  if (typeof toolInput.top_k === "number") {
+    return toolInput.top_k;
+  }
+
+  if (isPlainObject(toolInput.params) && typeof toolInput.params.top_k === "number") {
+    return toolInput.params.top_k;
+  }
+
+  if (isPlainObject(toolInput.filters) && typeof toolInput.filters.top_k === "number") {
+    return toolInput.filters.top_k;
+  }
+
+  return undefined;
+}
+
 function normalizeToolCallInput(tool: ToolName, toolInput: unknown): AgentToolInput {
   if (tool === "search_api") {
-    return asString(toolInput);
+    return extractSearchQuery(toolInput);
   }
 
   if (tool === "query_policy") {
@@ -65,8 +116,8 @@ function normalizeToolCallInput(tool: ToolName, toolInput: unknown): AgentToolIn
     }
 
     return {
-      query: asString(toolInput.query),
-      ...(typeof toolInput.top_k === "number" ? { top_k: toolInput.top_k } : {}),
+      query: extractSearchQuery(toolInput),
+      ...(typeof extractTopK(toolInput) === "number" ? { top_k: extractTopK(toolInput) } : {}),
     };
   }
 
@@ -74,11 +125,30 @@ function normalizeToolCallInput(tool: ToolName, toolInput: unknown): AgentToolIn
     return {};
   }
 
+  const domain = asString(toolInput.domain);
+  const rawIntent = asString(toolInput.intent);
+  const executeGuide = tool === "execute_query" ? toolPlannerGuides.execute_query : undefined;
+  const normalizedIntent =
+    executeGuide?.intent_aliases?.[rawIntent] ??
+    executeGuide?.intent_aliases?.[rawIntent.toLowerCase()] ??
+    rawIntent;
+
+  const params = isPlainObject(toolInput.params) ? { ...toolInput.params } : {};
+  const filters = isPlainObject(toolInput.filters) ? { ...toolInput.filters } : {};
+
+  if ((normalizedIntent === "search_products" || normalizedIntent === "query_products")) {
+    const hasFiltersQuery = asString(filters.query).length > 0;
+    const paramsQuery = asString(params.query);
+    if (!hasFiltersQuery && paramsQuery) {
+      filters.query = paramsQuery;
+    }
+  }
+
   return {
-    domain: asString(toolInput.domain),
-    intent: asString(toolInput.intent),
-    params: isPlainObject(toolInput.params) ? toolInput.params : {},
-    filters: isPlainObject(toolInput.filters) ? toolInput.filters : {},
+    domain,
+    intent: normalizedIntent,
+    params,
+    filters,
   };
 }
 
@@ -93,7 +163,22 @@ function validateToolCallInput(tool: ToolName, toolInput: unknown): boolean {
   }
 
   if (tool === "execute_query" && isPlainObject(normalizedToolInput)) {
-    return Boolean(asString(normalizedToolInput.domain) && asString(normalizedToolInput.intent));
+    const domain = asString(normalizedToolInput.domain);
+    const intent = asString(normalizedToolInput.intent);
+    if (!domain || !intent) {
+      return false;
+    }
+
+    if (domain === "rbac") {
+      return intent === "create_access_request";
+    }
+
+    if (domain !== "commerce") {
+      return false;
+    }
+
+    const validIntents = new Set(toolPlannerGuides.execute_query?.valid_intents ?? []);
+    return validIntents.has(intent);
   }
 
   return false;
@@ -377,6 +462,72 @@ function toAction(parsed: Record<string, unknown> | null, availableTools: ToolNa
     };
   }
 
+  // Compatibility path: some model outputs use action.type="escalation"
+  // instead of action.type="respond" with response_type="escalation".
+  if (actionType === "escalation") {
+    const caseSummary = asString(actionRow.case_summary);
+    const messageText = asString(actionRow.message_text) || caseSummary || "I have escalated this to a human specialist.";
+
+    const estimatedWait =
+      typeof actionRow.estimated_wait_minutes === "number" && Number.isFinite(actionRow.estimated_wait_minutes)
+        ? Math.max(0, Math.trunc(actionRow.estimated_wait_minutes))
+        : 0;
+    const queuePosition =
+      typeof actionRow.queue_position === "number" && Number.isFinite(actionRow.queue_position)
+        ? Math.max(0, Math.trunc(actionRow.queue_position))
+        : 0;
+
+    const actionsCompleted = Array.isArray(actionRow.actions_completed)
+      ? actionRow.actions_completed
+          .filter((item) => item && typeof item === "object")
+          .map((item) => item as Record<string, unknown>)
+          .map((item) => ({
+            label: asString(item.label),
+            detail: asString(item.detail),
+          }))
+          .filter((item) => item.label && item.detail)
+      : [];
+
+    const escalationCandidate = {
+      ticket_number: asString(actionRow.ticket_number) || "TKT-PENDING",
+      estimated_wait_minutes: estimatedWait,
+      queue_position: queuePosition,
+      case_summary: caseSummary || messageText,
+      actions_completed:
+        actionsCompleted.length > 0
+          ? actionsCompleted
+          : [{ label: "Escalated", detail: "A human specialist will review your case." }],
+    };
+
+    const parsedEscalation = escalationPayloadSchema.safeParse(escalationCandidate);
+
+    return {
+      type: "respond",
+      intent,
+      response_type: "escalation",
+      message_text: messageText,
+      payload: parsedEscalation.success ? parsedEscalation.data : undefined,
+      confidence_score:
+        typeof actionRow.confidence_score === "number" ? actionRow.confidence_score : undefined,
+      quick_actions: Array.isArray(actionRow.quick_actions)
+        ? actionRow.quick_actions
+            .map((item) => quickActionSchema.safeParse(item))
+            .filter((item) => item.success)
+            .map((item) => item.data)
+        : undefined,
+      ui_actions: toUiActions(actionRow.ui_actions),
+      summary:
+        typeof actionRow.summary === "string" && actionRow.summary.trim()
+          ? actionRow.summary.trim()
+          : undefined,
+      follow_up:
+        typeof actionRow.follow_up === "string" && actionRow.follow_up.trim()
+          ? actionRow.follow_up.trim()
+          : undefined,
+      show_sources: typeof actionRow.show_sources === "boolean" ? actionRow.show_sources : undefined,
+    };
+  }
+
   if (actionType === "artefact") {
     const artifactType = asString(actionRow.artifact_type || actionRow.document_type);
     const title = asString(actionRow.title);
@@ -450,7 +601,7 @@ export async function decideNextAgentAction(
   steps: AgentStepResult[] = [],
   systemPrompt: string = AGENT_SYSTEM_PROMPT,
   availableTools: ToolName[] = Object.keys(toolDescriptions) as ToolName[],
-  modes: ModeOptions = { research: false, thinking: true },
+  modes: ModeOptions = { research: false, thinking: false },
   forceRespond = false,
 ): Promise<AgentAction | null> {
   const model = getChatModel({ thinking: modes.thinking });

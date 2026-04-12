@@ -91,7 +91,7 @@ export async function routeRequest(
   prompt: string,
   correlationId: string,
   history: Array<{ role: "user" | "assistant"; text: string }> = [],
-  modes: ModeOptions = { research: false, thinking: true },
+  modes: ModeOptions = { research: false, thinking: false },
 ): Promise<AgentRoute> {
   const model = getChatModel({ thinking: modes.thinking });
   if (!model) {

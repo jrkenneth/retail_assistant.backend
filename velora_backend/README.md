@@ -1,53 +1,60 @@
-# Ecommerce Demo Backend
+# Velora Demo Backend
 
-Mock REST API backend for the Velora ecommerce platform used by Lena during local development and dissertation demos.
+Mock ecommerce REST API used by Lena for local development, integration tests, and dissertation demos.
 
-## Stack
+## Role in the System
 
-- Node.js
-- Express
-- TypeScript
+- Simulates customer, order, return, loyalty, support, and policy endpoints.
+- Provides API-key protected routes consumed by Lena backend tools.
+- Uses PostgreSQL with Knex migrations/seeds.
+
+## Prerequisites
+
+- Node.js 18+
 - PostgreSQL
-- Knex
 
-## Setup
+## Environment Setup
+
+1. Copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+2. Update DB credentials and API key as needed.
+
+## Install and Run
 
 ```bash
 npm install
-cp .env.example .env
 npm run db:migrate
 npm run db:seed
 npm run dev
 ```
 
-The service runs on `http://localhost:4001`.
+Default local URL:
 
-## Environment
-
-```env
-DATABASE_URL=
-API_KEY=
-PORT=4001
+```text
+http://localhost:4001
 ```
 
 ## Scripts
 
-- `npm run dev`
-- `npm run build`
-- `npm run start`
-- `npm run db:migrate`
-- `npm run db:migrate:rollback`
-- `npm run db:seed`
+- `npm run dev` - Run with live reload
+- `npm run build` - Compile TypeScript
+- `npm run start` - Run compiled server
+- `npm run db:migrate` - Apply migrations
+- `npm run db:migrate:rollback` - Rollback latest migration batch
+- `npm run db:seed` - Run seed scripts
 
-## Auth
+## Authentication
 
-All `/api/v1/*` routes except `/api/v1/auth/login` require:
+All `/api/v1/*` routes except `/api/v1/auth/login` require an API key.
 
-```http
-VELORA_API_KEY: your-api-key
-```
+Accepted headers:
 
-`X-API-Key` is also accepted for convenience during manual testing.
+- `VELORA_API_KEY: <your-key>`
+- `X-API-Key: <your-key>`
 
 ## Active API Areas
 
@@ -69,4 +76,6 @@ VELORA_API_KEY: your-api-key
 - `GET /api/v1/policies`
 - `GET /api/v1/policies/:policyKey`
 
-See [API_DOCUMENTATION.md](/Users/Ken/Documents/UG%20project/retail-ai-assistant/backend/velora_backend/API_DOCUMENTATION.md) for the endpoint contract.
+## Related Documentation
+
+- `API_DOCUMENTATION.md`

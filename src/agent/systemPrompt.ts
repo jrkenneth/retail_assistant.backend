@@ -12,6 +12,11 @@ export type ModeOptions = {
   thinking: boolean;
 };
 
+export type PromptRuntimeContext = {
+  currentDateIso?: string;
+  customerTimezone?: string;
+};
+
 function buildAccessSummarySection(availableTools: ToolName[]): string {
   const supportsCommerceQueries = availableTools.includes("execute_query");
   return [
@@ -46,11 +51,16 @@ function buildCoreSkillsSection(): string {
 }
 
 export function buildSystemPrompt(
-  modes: ModeOptions = { research: false, thinking: true },
+  modes: ModeOptions = { research: false, thinking: false },
   availableTools: ToolName[] = resolveAllowedTools(modes),
   activeSkills: SpecialistSkillName[] = [],
   user?: AuthenticatedUser,
+  runtimeContext: PromptRuntimeContext = {},
 ): string {
+  const currentDateIso = runtimeContext.currentDateIso
+    ?? new Date().toISOString().slice(0, 10);
+  const customerTimezone = runtimeContext.customerTimezone?.trim();
+
   const toolLines: string[] = ["TOOL SELECTION - use tools only when required, never speculatively:"];
 
   if (availableTools.length === 0) {
@@ -100,6 +110,9 @@ GLOBAL RULES
 6. If the issue should be handled by a human, say that clearly and help the customer progress to escalation.
 7. Ask only the smallest clarifying question needed to continue.
 8. Speak warmly and concisely.
+9. Use USD currency consistently in customer-facing text when currency is not explicitly provided by tool data. Do not infer or switch to other currencies (for example EUR/GBP) unless the tool output explicitly includes that currency.
+10. For mutable commerce facts (order status, return/refund eligibility, delivery timelines, return status), confirm using live execute_query data before giving a definitive answer. If a required identifier is missing, ask for it explicitly instead of assuming.
+11. Use CURRENT RUNTIME DATE for all date reasoning. Today is ${currentDateIso}${customerTimezone ? ` in timezone ${customerTimezone}` : " (timezone not provided)"}. For terms like "today", "yesterday", "within 30 days", and eligibility windows, anchor calculations to this runtime date and verified tool dates only.
 
 TOOL / SKILL WORKFLOW
 - Use specialist skills to decide how to handle the task.
@@ -139,14 +152,14 @@ For action.type="respond":
   - product_card payload: {sku,name,price,original_price?,availability_status,is_promotion_eligible,warranty_duration,return_window_days,specifications,image_url?,rating?,review_count?}
   - order_card payload: {order_number,order_date,status,delivery_status,tracking_number?,estimated_delivery_date?,refund_status?,items:[{name,quantity,unit_price}],can_initiate_return}
   - escalation payload: {ticket_number,estimated_wait_minutes,queue_position,case_summary,actions_completed:[{label,detail}]}
-  - refusal payload: {reason,policy_title,policy_bullets,order_context?}
+  - refusal payload: {reason_code?,reason,policy_title,policy_bullets,order_context?}
   - loyalty_card payload: {current_balance,tier?,recent_transactions:[{date,description,points,type}]}
 Do not invent values. Only include policy_citations when grounded in policy evidence.
 `.trim();
 }
 
 export const AGENT_SYSTEM_PROMPT = buildSystemPrompt(
-  { research: true, thinking: true },
+  { research: true, thinking: false },
   ["execute_query", "search_api"],
   [],
 );

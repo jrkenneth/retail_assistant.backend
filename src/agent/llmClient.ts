@@ -38,8 +38,8 @@ export function getChatModel(options: ChatModelOptions = {}) {
     configuration: {
       baseURL: normalizeOpenAiCompatBaseUrl(env.LLM_BASE_URL),
     },
-    temperature: thinkingEnabled ? 0.6 : 0.7,
-    topP: thinkingEnabled ? 0.95 : 0.8,
+    temperature: thinkingEnabled ? 0.6 : 0.2,
+    topP: thinkingEnabled ? 0.95 : 0.7,
     modelKwargs: {
       top_k: 20,
       chat_template_kwargs: {

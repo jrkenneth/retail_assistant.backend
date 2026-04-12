@@ -16,7 +16,7 @@ const makeId = (prefix: string) =>
 
 async function generateSessionTitle(
   userPrompt: string,
-  modes: ModeOptions = { research: false, thinking: true },
+  modes: ModeOptions = { research: false, thinking: false },
 ): Promise<string | null> {
   const fallbackTitle = userPrompt
     .trim()
@@ -96,7 +96,7 @@ async function processChatRequest(
   const request = parsed;
   const activeModes: ModeOptions = {
     research: request.context?.modes?.research ?? false,
-    thinking: request.context?.modes?.thinking ?? true,
+    thinking: request.context?.modes?.thinking ?? false,
   };
 
   logEvent("info", "chat.request.received", correlationId, {

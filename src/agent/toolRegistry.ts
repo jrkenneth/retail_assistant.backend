@@ -20,7 +20,7 @@ export type ToolExecutor = (
   input: AgentToolInput,
   context?: ToolContext,
 ) => Promise<ToolResult<Record<string, unknown>>>;
-const BASE_TOOLS: ToolName[] = ["execute_query"];
+const BASE_TOOLS: ToolName[] = ["execute_query", "query_policy"];
 const RESEARCH_MODE_TOOLS: ToolName[] = ["search_api"];
 
 export type ToolPlannerExample = {
@@ -73,6 +73,8 @@ export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
       "get_order_items",
       "initiate_return",
       "get_return_status",
+      "query_returns",
+      "get_return_detail",
       "get_support_ticket",
       "create_support_ticket",
       "get_loyalty_balance",
@@ -82,12 +84,32 @@ export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
       "health_check",
       "create_access_request",
     ],
+    intent_aliases: {
+      get_order_status: "track_order",
+      retrieve_order_status: "track_order",
+      get_order_tracking: "track_order",
+      get_order_details: "get_order_detail",
+      retrieve_order_details: "get_order_detail",
+      get_order_info: "get_order_detail",
+      list_order_items: "get_order_items",
+      get_loyalty_transactions: "get_loyalty_history",
+      query_loyalty_transactions: "get_loyalty_history",
+      get_loyalty_activity: "get_loyalty_history",
+      query_loyalty_activity: "get_loyalty_history",
+      get_return_detail: "query_returns",
+      get_return_eligibility: "query_returns",
+      check_return_eligibility: "query_returns",
+      retrieve_return_status: "query_returns",
+      retrieve_policy: "query_policy_documents",
+      get_policy_details: "query_policy_documents",
+      fetch_policy: "query_policy_documents",
+    },
     examples: [
       {
         user_request: "Track my order ZX123456789",
         tool_input: {
           domain: "commerce",
-          intent: "track_order",
+          intent: "get_order_detail",
           params: { order_number: "ZX123456789" },
           filters: {},
         },
@@ -99,6 +121,15 @@ export const toolPlannerGuides: Partial<Record<ToolName, ToolPlannerGuide>> = {
           intent: "search_products",
           params: {},
           filters: { query: "Premium Wireless Headphones Model X", limit: 20 },
+        },
+      },
+      {
+        user_request: "Get full details for product SKU-98123",
+        tool_input: {
+          domain: "commerce",
+          intent: "get_product_detail",
+          params: { sku: "SKU-98123" },
+          filters: {},
         },
       },
       {

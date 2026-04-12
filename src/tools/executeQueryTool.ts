@@ -16,6 +16,31 @@ const executeQuerySchema = z.object({
   filters: z.record(z.any()).optional().default({}),
 });
 
+const EXECUTE_QUERY_INTENT_ALIASES: Record<string, string> = {
+  get_order_status: "track_order",
+  retrieve_order_status: "track_order",
+  get_order_tracking: "track_order",
+  get_order_details: "get_order_detail",
+  retrieve_order_details: "get_order_detail",
+  get_order_info: "get_order_detail",
+  list_order_items: "get_order_items",
+  get_loyalty_transactions: "get_loyalty_history",
+  query_loyalty_transactions: "get_loyalty_history",
+  get_loyalty_activity: "get_loyalty_history",
+  query_loyalty_activity: "get_loyalty_history",
+  retrieve_policy: "query_policy_documents",
+  get_policy_details: "query_policy_documents",
+  fetch_policy: "query_policy_documents",
+};
+
+function normalizeExecuteQueryIntent(intent: string): string {
+  const trimmed = intent.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return EXECUTE_QUERY_INTENT_ALIASES[trimmed] ?? EXECUTE_QUERY_INTENT_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
 const CUSTOMER_SCOPED_INTENTS = new Set([
   "get_customer_profile",
   "get_order_history",
@@ -32,6 +57,11 @@ const CUSTOMER_SCOPED_INTENTS = new Set([
   "get_loyalty_balance",
   "get_loyalty_history",
   "get_loyalty_summary",
+]);
+
+const ORDER_IDENTIFIER_INTENTS = new Set([
+  "track_order",
+  "get_order_items",
 ]);
 
 type QueryPayload = z.infer<typeof executeQuerySchema>;
@@ -186,6 +216,17 @@ function sanitizeRecord(
       continue;
     }
 
+    if (key === "specifications" && isPlainObject(entry)) {
+      const specs: Record<string, unknown> = {};
+      for (const [specKey, specValue] of Object.entries(entry)) {
+        if (typeof specValue === "string" || typeof specValue === "number" || typeof specValue === "boolean") {
+          specs[specKey] = specValue;
+        }
+      }
+      output[key] = specs;
+      continue;
+    }
+
     if (Array.isArray(entry)) {
       output[key] = entry.map((item) => (isPlainObject(item) ? sanitizeRecord(item, allowedColumns) : item));
       continue;
@@ -259,6 +300,12 @@ function verifyPostQueryScope(
   payload: Record<string, unknown>,
   user: AuthenticatedUser,
 ): boolean {
+  // This endpoint is path-scoped by customer_number and returns transaction rows
+  // without a customer_number field per row.
+  if (intent === "get_loyalty_history") {
+    return true;
+  }
+
   if (!CUSTOMER_SCOPED_INTENTS.has(intent)) {
     return true;
   }
@@ -269,6 +316,36 @@ function verifyPostQueryScope(
   }
 
   return records.every((record) => recordBelongsToCustomer(record, user.customer_number));
+}
+
+async function verifyOrderOwnershipForIdentifierIntent(
+  intent: string,
+  params: Record<string, unknown>,
+  user: AuthenticatedUser,
+): Promise<boolean | undefined> {
+  if (!ORDER_IDENTIFIER_INTENTS.has(intent)) {
+    return undefined;
+  }
+
+  const orderNumber = typeof params.order_number === "string" ? params.order_number.trim() : "";
+  if (!orderNumber) {
+    return false;
+  }
+
+  const detail = await ecommerceAdapter.execute("get_order_detail", { order_number: orderNumber });
+  if (detail.not_found === true) {
+    // Order doesn't exist — let the actual tool call return a natural not-found
+    // response rather than a misleading "not your order" access denial.
+    return undefined;
+  }
+
+  const data = isPlainObject(detail.data) ? detail.data : null;
+  const ownerNumber = data && typeof data.customer_number === "string" ? data.customer_number : "";
+  if (!ownerNumber) {
+    return false;
+  }
+
+  return ownerNumber === user.customer_number;
 }
 
 function enforceScope(
@@ -377,10 +454,50 @@ export async function executeQueryClient(
 
   const payload = executeQuerySchema.parse({
     domain: input.domain,
-    intent: input.intent,
+    intent: normalizeExecuteQueryIntent(typeof input.intent === "string" ? input.intent : ""),
     params: isPlainObject(input.params) ? input.params : {},
     filters: isPlainObject(input.filters) ? input.filters : {},
   });
+
+  const orderNumber = typeof payload.params.order_number === "string" ? payload.params.order_number.trim() : "";
+  const returnNumber = typeof payload.params.return_number === "string" ? payload.params.return_number.trim() : "";
+
+  if ((payload.intent === "get_return_status" || payload.intent === "get_return_detail") && !returnNumber && orderNumber) {
+    payload.intent = "query_returns";
+    payload.filters.order_number = orderNumber;
+    delete payload.params.order_number;
+  }
+
+  if (payload.intent === "search_products" || payload.intent === "query_products") {
+    const paramsQuery = typeof payload.params.query === "string" ? payload.params.query.trim() : "";
+    const hasFiltersQuery =
+      typeof payload.filters.query === "string" && payload.filters.query.trim().length > 0;
+
+    if (!hasFiltersQuery && paramsQuery) {
+      payload.filters.query = paramsQuery;
+    }
+
+    const paramsLimit = payload.params.limit;
+    const paramsPage = payload.params.page;
+    if (payload.filters.limit === undefined && paramsLimit !== undefined) {
+      payload.filters.limit = paramsLimit;
+    }
+    if (payload.filters.page === undefined && paramsPage !== undefined) {
+      payload.filters.page = paramsPage;
+    }
+  }
+
+  if (payload.intent === "query_policy_documents") {
+    const hasSearch = typeof payload.filters.search === "string" && payload.filters.search.trim().length > 0;
+    if (!hasSearch) {
+      const topic = typeof payload.filters.topic === "string" ? payload.filters.topic.trim() : "";
+      const subtopic = typeof payload.filters.subtopic === "string" ? payload.filters.subtopic.trim() : "";
+      const synthesizedSearch = [topic, subtopic].filter(Boolean).join(" ").trim();
+      if (synthesizedSearch) {
+        payload.filters.search = synthesizedSearch;
+      }
+    }
+  }
 
   const user = ensureUser(context);
   const refreshed = await refreshUserContext(user);
@@ -457,6 +574,44 @@ export async function executeQueryClient(
   }
 
   const scopedPayload = enforceScope(payload, effectiveUser);
+  const verifiedOrderOwnership = await verifyOrderOwnershipForIdentifierIntent(
+    payload.intent,
+    scopedPayload.params,
+    effectiveUser,
+  );
+
+  if (verifiedOrderOwnership === false) {
+    const denied = makeAccessDenied("This order does not belong to the current customer account.");
+    await logAuditEvent({
+      customer_id: effectiveUser.customer_id,
+      customer_email: effectiveUser.email,
+      event_type: "access_denied",
+      domain: payload.domain,
+      intent: payload.intent,
+      params_snapshot: {
+        params: scopedPayload.params,
+        filters: scopedPayload.filters,
+      },
+      reason: "Order ownership verification failed for identifier-based order intent.",
+      ip_address: context?.ipAddress ?? null,
+    });
+    return {
+      tool: "execute_query",
+      version: "v1",
+      data: {
+        ok: true,
+        kind: "record",
+        payload: denied,
+        summary: buildExecuteQuerySummary(payload.intent, denied),
+      },
+      citation: {
+        label: "domain:commerce",
+        source: "Velora Platform",
+        uri: env.VELORA_API_URL,
+      },
+    };
+  }
+
   for (const violation of scopedPayload.scopeViolations) {
     await logAuditEvent({
       customer_id: effectiveUser.customer_id,
@@ -476,8 +631,11 @@ export async function executeQueryClient(
   const rawResult = await ecommerceAdapter.execute(payload.intent, scopedPayload.params, scopedPayload.filters);
   let parsedResult = rawResult as Record<string, unknown>;
 
-  if (!verifyPostQueryScope(payload.intent, parsedResult, effectiveUser)) {
-    const denied = makeAccessDenied();
+  const skipPostQueryScope =
+    verifiedOrderOwnership === true && ORDER_IDENTIFIER_INTENTS.has(payload.intent);
+
+  if (!skipPostQueryScope && !verifyPostQueryScope(payload.intent, parsedResult, effectiveUser)) {
+    const denied = makeAccessDenied("Returned records could not be verified as belonging to the current customer account.");
     await logAuditEvent({
       customer_id: effectiveUser.customer_id,
       customer_email: effectiveUser.email,
