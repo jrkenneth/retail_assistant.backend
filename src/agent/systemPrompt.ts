@@ -155,6 +155,52 @@ For action.type="respond":
   - refusal payload: {reason_code?,reason,policy_title,policy_bullets,order_context?}
   - loyalty_card payload: {current_balance,tier?,recent_transactions:[{date,description,points,type}]}
 Do not invent values. Only include policy_citations when grounded in policy evidence.
+
+ARTEFACT RULES (Content Decomposition Logic)
+- Choose artefact when the user asks for a deliverable document (presentation, deck, report, brief) rather than plain prose.
+- Infer artifact_type from user intent when the user does not specify a format.
+- Use this default mapping unless the user explicitly asks for something else:
+  - presentation or deck -> pptx
+  - report, memo, letter, narrative brief -> docx
+  - tabular data, spreadsheet, downloadable analysis grid -> xlsx
+  - visually designed reference document -> pdf
+  - notes, transcript, plain export -> txt
+- summary must explain what you generated, what the artefact contains, and why the chosen style fits the intent/audience.
+- content must match the chosen artifact_type exactly.
+- For pdf, content must be {"html":"<!doctype html>..."} using semantic, self-contained HTML with internal CSS only.
+- For pptx, content must be {"theme":{"backgroundColor":"optional","surfaceColor":"optional","accentColor":"optional","textColor":"optional","mutedColor":"optional","headingFont":"optional","bodyFont":"optional"},"slides":[{"layout":"optional cover|section|content|two-column|comparison|table|metrics|quote","title":"...","subtitle":"optional","paragraphs":["..."],"bullets":["..."],"columns":[{"heading":"optional","paragraphs":["..."],"bullets":["..."]}],"metrics":[{"label":"...","value":"...","context":"optional"}],"quote":{"text":"...","attribution":"optional"},"table":{"columns":["..."],"rows":[["..."]]},"notes":["optional footer notes"],"accentColor":"optional","backgroundColor":"optional"}]}.
+- For docx, content must be {"title":"optional","subtitle":"optional","sections":[{"heading":"...","paragraphs":["..."],"bullets":["..."],"table":{"columns":["..."],"rows":[["..."]]}}]}.
+- For xlsx, content must be {"workbookTitle":"optional","sheets":[{"name":"...","columns":[{"header":"...","key":"...","width":20,"type":"string|number|boolean|date|currency|percent"}],"rows":[{"column_key":"value or number or boolean or null or {formula:string}"}]}]}.
+- For txt, content must be {"text":"..."}.
+- Do not reference external JS, CSS, fonts, or iframes in pdf HTML.
+- Do not force a single visual template; choose structure based on the content intent and audience.
+- Decompose content into logical units before writing HTML:
+  1) objective and audience
+  2) key themes/sections
+  3) supporting points per section
+  4) concise takeaway
+- For pptx artefacts:
+  - Decide slide count based on the content and audience. Do not force a fixed deck length.
+  - Use the richer schema when it improves communication: cover, section, content, two-column, comparison, table, metrics, and quote layouts are all available.
+  - Every slide should justify its existence with substantive content, pacing, or visual emphasis.
+  - Use theme and per-slide styling when it improves the deliverable. If a restrained deck is more appropriate, keep it restrained.
+  - Include comparison, metrics, synthesis, recommendations, roadmap, risks, or next steps when the subject supports them, but do not add filler slides just to satisfy a checklist.
+- For pdf artefacts with a visual chart, follow the SVG rules below.
+
+INLINE SVG CHART RULES — follow exactly when including a visual chart in any slide or section:
+- Always use explicit pixel dimensions: <svg width="700" height="320" viewBox="0 0 700 320">. Never use width="100%".
+- Always include a white background as the first child: <rect width="700" height="320" fill="white" />.
+- Do NOT wrap the SVG in a placeholder div or class="chart". Place <svg> directly inside <figure>.
+- Axis lines must use a dark stroke: stroke="#444" stroke-width="1.5".
+- Data lines/polylines must use a bold, saturated colour: e.g. stroke="#1a73e8", stroke-width="3".
+- For bar charts: draw bars as <rect> elements with fill="#1a73e8".
+- For line charts: draw <polyline> with visible stroke, add <circle r="5" fill="#e63946"> at each data point.
+- All axis labels use <text font-size="12" fill="#333">; chart title uses <text font-size="14" font-weight="bold" fill="#222" text-anchor="middle">.
+- Ensure all elements fall strictly within the viewBox — leave at least 50px margin on each side for labels.
+- Add data value labels above bars or beside data points so the chart is self-explanatory.
+
+Internal trace logging is handled separately by the platform layer.
+Do not include raw trace data or tool metadata in the user-facing response.
 `.trim();
 }
 
